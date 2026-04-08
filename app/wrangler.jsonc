@@ -1,10 +1,6 @@
 {
   "name": "sayr",
+  "pages_build_output_dir": ".open-next/assets",
   "compatibility_date": "2025-04-01",
-  "compatibility_flags": ["nodejs_compat"],
-  "assets": {
-    "binding": "ASSETS",
-    "directory": ".worker-next/assets"
-  },
-  "main": ".worker-next/index.mjs"
+  "compatibility_flags": ["nodejs_compat"]
 }
