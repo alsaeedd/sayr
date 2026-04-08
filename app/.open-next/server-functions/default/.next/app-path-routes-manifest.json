@@ -1,0 +1,12 @@
+{
+  "/_not-found/page": "/_not-found",
+  "/_global-error/page": "/_global-error",
+  "/api/prayer-times/route": "/api/prayer-times",
+  "/auth/callback/route": "/auth/callback",
+  "/icon.svg/route": "/icon.svg",
+  "/page": "/",
+  "/(app)/dashboard/page": "/dashboard",
+  "/(app)/session/[id]/page": "/session/[id]",
+  "/(app)/session/new/page": "/session/new",
+  "/(app)/settings/page": "/settings"
+}

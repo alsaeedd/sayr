@@ -1,6 +1,12 @@
 {
+  "$schema": "node_modules/wrangler/config-schema.json",
   "name": "sayr",
-  "pages_build_output_dir": ".open-next/assets",
+  "main": ".open-next/worker.js",
   "compatibility_date": "2025-04-01",
-  "compatibility_flags": ["nodejs_compat"]
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "find_additional_modules": true
 }

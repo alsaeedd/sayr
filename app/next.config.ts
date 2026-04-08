@@ -1,8 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Required for Cloudflare Pages
-  // Uses edge runtime for server-side features
+  // Use Webpack instead of Turbopack for Cloudflare Workers compat
+  // Turbopack generates individual chunk files that Workers can't resolve
 };
 
 export default nextConfig;

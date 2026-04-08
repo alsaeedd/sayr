@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 
 // Aladhan API calculation methods
 // See: https://aladhan.com/prayer-times-api#GetTimings
-export const CALCULATION_METHODS: Record<string, { id: number; name: string; region: string }> = {
+const CALCULATION_METHODS: Record<string, { id: number; name: string; region: string }> = {
   JAFARI:       { id: 0,  name: 'Shia Ithna-Ashari, Leva Institute, Qum', region: 'Iran / Shia' },
   KARACHI:      { id: 1,  name: 'University of Islamic Sciences, Karachi', region: 'Pakistan / South Asia' },
   ISNA:         { id: 2,  name: 'Islamic Society of North America', region: 'North America' },
