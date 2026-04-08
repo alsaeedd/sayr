@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "skills": {
+    "astro": {
+      "source": "alsaeedd/claudimatrix",
+      "sourceType": "github",
+      "computedHash": "8d584a688b55b672d491943648f241734fb31415da5409c5d1fe07a4d875a7ee"
+    },
+    "docker": {
+      "source": "alsaeedd/claudimatrix",
+      "sourceType": "github",
+      "computedHash": "3791f829d5b800986541f55955b4d896fa18877f2e74521dd1f1009101d447e5"
+    },
+    "drizzle": {
+      "source": "alsaeedd/claudimatrix",
+      "sourceType": "github",
+      "computedHash": "c35aac50511b1a421a0e967b7695c785e5f1fbd5ab9c32e03ab647bee0c92cec"
+    },
+    "nestjs": {
+      "source": "alsaeedd/claudimatrix",
+      "sourceType": "github",
+      "computedHash": "53cbf1b85db77d61e8fc523c09a26bce4421029301b645f8604350219c2cd69e"
+    },
+    "nextjs": {
+      "source": "alsaeedd/claudimatrix",
+      "sourceType": "github",
+      "computedHash": "bc247007311979a7c562e04feeae408a3d4a5c142698593efa8292bb54aa4467"
+    },
+    "postgresql": {
+      "source": "alsaeedd/claudimatrix",
+      "sourceType": "github",
+      "computedHash": "07b87d0340e61aa91ee5713694ec0a2576dd0a9ba5332bd83d87dbe99c18cb93"
+    },
+    "prisma": {
+      "source": "alsaeedd/claudimatrix",
+      "sourceType": "github",
+      "computedHash": "6694875ab1844071cb470c57fbefedda5184510ec4bcd27379ef9dcde9381fc9"
+    },
+    "react": {
+      "source": "alsaeedd/claudimatrix",
+      "sourceType": "github",
+      "computedHash": "607bde57cfd9b8446f16a2a9296444b70937c66a47889bf6da5ef5e6f3ae2cdb"
+    },
+    "ui-dark-premium": {
+      "source": "alsaeedd/claudimatrix",
+      "sourceType": "github",
+      "computedHash": "6c22f731c26c45ca9b230c0908f66d62d553144fdf3c82d92476c53271ad1cc2"
+    },
+    "ui-design": {
+      "source": "alsaeedd/claudimatrix",
+      "sourceType": "github",
+      "computedHash": "e473f346273b32c98abb18cc5bf8a0244f9f261c098d4f779ca38b41ad58dab9"
+    },
+    "ui-marketing": {
+      "source": "alsaeedd/claudimatrix",
+      "sourceType": "github",
+      "computedHash": "9e6da182810d168c0b3f8ce4ad50dfc608d1f5998ca6a66f9fff9f02b7818a0e"
+    }
+  }
+}
