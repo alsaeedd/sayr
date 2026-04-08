@@ -7,6 +7,8 @@ create table if not exists public.profiles (
   location_lat decimal,
   location_lng decimal,
   timezone text default 'UTC',
+  prayer_method int default 8,
+  presets jsonb,
   created_at timestamptz default now()
 );
 
@@ -28,6 +30,7 @@ create or replace trigger on_auth_user_created
 create table if not exists public.sessions (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references public.profiles(id) on delete cascade not null,
+  name text,
   current_step int default 1 check (current_step between 1 and 6),
   status text default 'active' check (status in ('active', 'completed', 'abandoned')),
   musharata jsonb,
@@ -59,6 +62,9 @@ create policy "Users can create own sessions"
 
 create policy "Users can update own sessions"
   on public.sessions for update using (auth.uid() = user_id);
+
+create policy "Users can delete own sessions"
+  on public.sessions for delete using (auth.uid() = user_id);
 
 -- Index for fast session queries
 create index if not exists idx_sessions_user_id on public.sessions(user_id);

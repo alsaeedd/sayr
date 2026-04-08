@@ -3,12 +3,21 @@ export interface Profile {
   display_name: string | null
   location_lat: number | null
   location_lng: number | null
+  timezone: string
+  prayer_method: number | null
+  presets: UserPresets | null
   created_at: string
+}
+
+export interface UserPresets {
+  avoidances: string[]
+  boundaries: string[]
 }
 
 export interface Session {
   id: string
   user_id: string
+  name: string | null
   current_step: number
   status: 'active' | 'completed' | 'abandoned'
   musharata: MusharataData | null

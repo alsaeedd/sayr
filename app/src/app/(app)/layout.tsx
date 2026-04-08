@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
+import { AppShell } from '@/components/AppShell'
 
 export default async function AppLayout({
   children,
@@ -13,5 +14,5 @@ export default async function AppLayout({
     redirect('/')
   }
 
-  return <>{children}</>
+  return <AppShell>{children}</AppShell>
 }
