@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Play, Pause, Pencil } from 'lucide-react'
+import { Play, Pause, Pencil, ArrowRight, Check } from 'lucide-react'
 import { GoldenParticles } from '@/components/GoldenParticles'
 import type { Session, MuraqabaBlockResult } from '@/lib/types'
 
@@ -35,6 +35,12 @@ export function Muraqaba({
   const [driftCount, setDriftCount] = useState(0) // drifts in current block (or overall for time_block)
   const [driftKey, setDriftKey] = useState(0) // for ripple re-trigger
   const [blockResults, setBlockResults] = useState<MuraqabaBlockResult[]>([])
+  // Tasks the user opted to carry forward. Keyed by TARGET block index.
+  // Each entry is a list of tasks copied from a past block into that future one.
+  const [carriedTasks, setCarriedTasks] = useState<Record<number, Array<{ text: string; bucket?: string }>>>({})
+  // One-shot flag set during restore so we don't fight the restored state
+  // with the normal 'briefing/between → totalSeconds' reseed effect.
+  const restoredRef = useRef(false)
 
   // Total drifts across all blocks (full-day) — time_block uses driftCount directly.
   const totalDriftCount = useMemo(
@@ -65,12 +71,110 @@ export function Muraqaba({
   const endTimeRef = useRef<number | null>(null)
 
   // Keep `remaining` in sync with `totalSeconds` whenever the current block changes
-  // (and on initial mount).
+  // (and on initial mount). Skip the first run after a restore so the
+  // restored timer isn't overwritten.
   useEffect(() => {
+    if (restoredRef.current) {
+      restoredRef.current = false
+      return
+    }
     if (phase === 'briefing' || phase === 'between') {
       setRemaining(totalSeconds)
     }
   }, [totalSeconds, phase])
+
+  // ──── localStorage persistence ────────────────────────────────────
+  // Survives page refresh and tab close on the SAME device/browser.
+  // Does NOT sync across devices — that would need DB-backed state.
+  const storageKey = `muraqaba-state:${session.id}`
+
+  // Restore on mount. Runs once.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const raw = window.localStorage.getItem(storageKey)
+    if (!raw) return
+    try {
+      const s = JSON.parse(raw) as {
+        phase: Phase
+        currentBlockIndex: number
+        driftCount: number
+        blockResults: MuraqabaBlockResult[]
+        carriedTasks: Record<number, Array<{ text: string; bucket?: string }>>
+        blockStart: string
+        sessionStart: string
+        endTime: number | null
+        pauseRemaining: number | null
+        isRunning: boolean
+      }
+
+      restoredRef.current = true
+      setPhase(s.phase)
+      setCurrentBlockIndex(s.currentBlockIndex ?? 0)
+      setDriftCount(s.driftCount ?? 0)
+      setBlockResults(s.blockResults ?? [])
+      setCarriedTasks(s.carriedTasks ?? {})
+      blockStartRef.current = s.blockStart ?? ''
+      sessionStartRef.current = s.sessionStart ?? ''
+
+      if (s.phase === 'active') {
+        if (s.isRunning && s.endTime) {
+          endTimeRef.current = s.endTime
+          const msLeft = s.endTime - Date.now()
+          setRemaining(Math.max(0, Math.ceil(msLeft / 1000)))
+          setIsRunning(true)
+        } else if (s.pauseRemaining != null) {
+          setRemaining(s.pauseRemaining)
+          setIsRunning(false)
+        }
+      }
+    } catch {
+      // Corrupt state — start fresh.
+      window.localStorage.removeItem(storageKey)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Save on every meaningful state change. Not on remaining-tick (noisy).
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    if (phase === 'briefing') {
+      window.localStorage.removeItem(storageKey)
+      return
+    }
+    const payload = {
+      phase,
+      currentBlockIndex,
+      driftCount,
+      blockResults,
+      carriedTasks,
+      blockStart: blockStartRef.current,
+      sessionStart: sessionStartRef.current,
+      endTime: isRunning ? endTimeRef.current : null,
+      pauseRemaining: isRunning ? null : remaining,
+      isRunning,
+      savedAt: Date.now(),
+    }
+    window.localStorage.setItem(storageKey, JSON.stringify(payload))
+    // Intentionally omit `remaining` from deps — we only snapshot it when
+    // isRunning flips (pause). Polling ticks would thrash localStorage.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, currentBlockIndex, driftCount, blockResults, carriedTasks, isRunning, storageKey])
+
+  const toggleCarry = useCallback((targetBlockIdx: number, task: { text: string; bucket?: string }) => {
+    setCarriedTasks(prev => {
+      const existing = prev[targetBlockIdx] ?? []
+      const isAlready = existing.some(t => t.text === task.text)
+      const next = {
+        ...prev,
+        [targetBlockIdx]: isAlready
+          ? existing.filter(t => t.text !== task.text)
+          : [...existing, task],
+      }
+      // Empty entries clean up so the map stays tidy.
+      if (next[targetBlockIdx].length === 0) delete next[targetBlockIdx]
+      return next
+    })
+  }, [])
 
   useEffect(() => {
     if (!isRunning) return
@@ -179,6 +283,11 @@ export function Muraqaba({
   const handleComplete = () => {
     const sessionEnd = new Date().toISOString()
 
+    // Clear persisted in-progress state — final data lands on the session row.
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(storageKey)
+    }
+
     if (blocks) {
       const totalMinutes = blockResults.reduce((sum, b) => sum + b.duration_minutes, 0)
       onComplete({
@@ -208,9 +317,11 @@ export function Muraqaba({
   const glowIntensity = 0.2 + progress * 0.4
 
   const currentBlock = blocks?.[currentBlockIndex]
-  const tasksForCurrentBlock = currentBlock
+  const originalCurrentBlockTasks = currentBlock
     ? musharata?.blocks?.find(b => b.label === currentBlock.label)?.tasks ?? []
     : []
+  const carriedIntoCurrent = carriedTasks[currentBlockIndex] ?? []
+  const tasksForCurrentBlock = [...originalCurrentBlockTasks, ...carriedIntoCurrent]
 
   // Total session minutes for complete screen
   const completionMinutes = blocks
@@ -518,21 +629,32 @@ export function Muraqaba({
           </motion.div>
         )}
 
-        {phase === 'between' && blocks && (
+        {phase === 'between' && blocks && (() => {
+          const justFinishedIndex = currentBlockIndex
+          const justFinishedBlock = blocks[justFinishedIndex]
+          const justFinishedTasks = musharata?.blocks
+            ?.find(b => b.label === justFinishedBlock.label)?.tasks ?? []
+          const nextIndex = justFinishedIndex + 1
+          const nextBlock = blocks[nextIndex]
+          const nextOriginalTasks = musharata?.blocks
+            ?.find(b => b.label === nextBlock?.label)?.tasks ?? []
+          const nextCarried = carriedTasks[nextIndex] ?? []
+
+          return (
           <motion.div
             key={`between-${currentBlockIndex}`}
             initial={{ opacity: 0, scale: 0.96, filter: 'blur(4px)' }}
             animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
             exit={{ opacity: 0, y: -12 }}
             transition={{ type: 'spring', stiffness: 200, damping: 24 }}
-            className="space-y-6 text-center pt-8"
+            className="space-y-5 pt-6"
           >
-            <div className="space-y-2">
+            <div className="space-y-2 text-center">
               <p className="text-text-muted text-[11px] uppercase tracking-[0.15em]">
-                Block {currentBlockIndex + 1} of {blocks.length} complete
+                Block {justFinishedIndex + 1} of {blocks.length} complete
               </p>
               <h3 className="text-xl text-text-primary font-light">
-                {blocks[currentBlockIndex].label}
+                {justFinishedBlock.label}
               </h3>
               {blockResults[blockResults.length - 1] && (
                 <p className="text-text-secondary text-sm">
@@ -542,31 +664,117 @@ export function Muraqaba({
               )}
             </div>
 
-            {/* Up next preview */}
-            <motion.div
-              className="glass-card p-5 space-y-3 max-w-md mx-auto text-left"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
-            >
-              <div className="flex items-center justify-between">
-                <p className="text-text-muted text-[11px] uppercase tracking-[0.15em]">Up next</p>
-                <p className="text-text-muted text-xs tabular-nums">
-                  {blocks[currentBlockIndex + 1]?.start} — {blocks[currentBlockIndex + 1]?.end}
-                </p>
-              </div>
-              <p className="text-gold text-sm font-medium">{blocks[currentBlockIndex + 1]?.label}</p>
-              <ul className="space-y-0.5">
-                {(musharata?.blocks?.find(b => b.label === blocks[currentBlockIndex + 1]?.label)?.tasks ?? []).map((t, i) => (
-                  <li key={i} className="text-text-secondary text-xs flex items-start gap-2">
-                    <span className="text-gold-dim mt-0.5">·</span>
-                    {t.text}
-                  </li>
-                ))}
-              </ul>
-            </motion.div>
+            {/* Past blocks rollup (collapsed summary). Hidden on the first transition
+                since there's nothing meaningful yet beyond the just-finished one. */}
+            {blockResults.length > 1 && (
+              <motion.details
+                className="glass-card p-3 text-left"
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.15 }}
+              >
+                <summary className="text-text-muted text-[11px] uppercase tracking-[0.15em] cursor-pointer hover:text-text-secondary">
+                  Past blocks ({blockResults.length})
+                </summary>
+                <div className="mt-2 space-y-1">
+                  {blockResults.map((b, i) => (
+                    <div key={i} className="flex justify-between text-xs">
+                      <span className="text-text-secondary">{b.label}</span>
+                      <span className="text-text-muted tabular-nums">
+                        {b.duration_minutes}m · {b.drift_count} drifts
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </motion.details>
+            )}
 
-            <div className="flex flex-col items-center gap-2">
+            {/* Carry-forward picker: tap any task from the just-finished block
+                to push it into the next block's list. */}
+            {nextBlock && justFinishedTasks.length > 0 && (
+              <motion.div
+                className="glass-card p-4 space-y-2 text-left"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.2 }}
+              >
+                <div>
+                  <p className="text-text-muted text-[11px] uppercase tracking-[0.15em]">
+                    From &ldquo;{justFinishedBlock.label}&rdquo;
+                  </p>
+                  <p className="text-text-muted text-[11px] mt-0.5">
+                    Tap to carry a task into the next block.
+                  </p>
+                </div>
+                <ul className="space-y-1">
+                  {justFinishedTasks.map((t, i) => {
+                    const isCarried = nextCarried.some(c => c.text === t.text)
+                    return (
+                      <li key={i}>
+                        <button
+                          onClick={() => toggleCarry(nextIndex, t)}
+                          className={`w-full flex items-start gap-2 text-xs text-left p-2 rounded-lg border transition-all ${
+                            isCarried
+                              ? 'border-gold/40 bg-gold/[0.06] text-gold'
+                              : 'border-transparent text-text-secondary hover:border-border-subtle hover:text-text-primary'
+                          }`}
+                        >
+                          <span className="mt-0.5 shrink-0">
+                            {isCarried ? <Check size={12} /> : <ArrowRight size={12} className="opacity-40" />}
+                          </span>
+                          <span className="flex-1">{t.text}</span>
+                          {t.bucket && (
+                            <span className={`text-[10px] uppercase tracking-wider ${isCarried ? 'text-gold/70' : 'text-text-muted'}`}>
+                              {t.bucket}
+                            </span>
+                          )}
+                        </button>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </motion.div>
+            )}
+
+            {/* Up next preview — now includes carried tasks */}
+            {nextBlock && (
+              <motion.div
+                className="glass-card p-4 space-y-3 text-left"
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.25 }}
+              >
+                <div className="flex items-center justify-between">
+                  <p className="text-text-muted text-[11px] uppercase tracking-[0.15em]">Up next</p>
+                  <p className="text-text-muted text-xs tabular-nums">
+                    {nextBlock.start} — {nextBlock.end}
+                  </p>
+                </div>
+                <p className="text-gold text-sm font-medium">{nextBlock.label}</p>
+                <ul className="space-y-0.5">
+                  {nextOriginalTasks.map((t, i) => (
+                    <li key={`orig-${i}`} className="text-text-secondary text-xs flex items-start gap-2">
+                      <span className="text-gold-dim mt-0.5">·</span>
+                      {t.text}
+                    </li>
+                  ))}
+                  {nextCarried.map((t, i) => (
+                    <li key={`carry-${i}`} className="text-gold text-xs flex items-start gap-2">
+                      <ArrowRight size={11} className="mt-0.5 shrink-0 opacity-70" />
+                      <span className="flex-1">{t.text}</span>
+                      <button
+                        onClick={() => toggleCarry(nextIndex, t)}
+                        className="text-text-muted hover:text-text-secondary text-[10px]"
+                      >
+                        remove
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </motion.div>
+            )}
+
+            <div className="flex flex-col items-center gap-2 pt-2">
               <motion.button
                 onClick={startNextBlock}
                 className="btn-gold inline-flex items-center gap-2"
@@ -585,7 +793,8 @@ export function Muraqaba({
               </motion.button>
             </div>
           </motion.div>
-        )}
+          )
+        })()}
 
         {phase === 'complete' && (
           <motion.div
