@@ -15,6 +15,15 @@ function durationSecs(start: string, end: string): number {
   return Math.max((eh * 60 + em) - (sh * 60 + sm), 1) * 60
 }
 
+// Absolute ms of today-at-HH:MM. Used to pin the timer to a wall-clock
+// target (e.g., Maghrib at 18:00) rather than a fixed duration-from-now.
+function endOfBlockTodayMs(endHHMM: string): number {
+  const [h, m] = endHHMM.split(':').map(Number)
+  const d = new Date()
+  d.setHours(h, m, 0, 0)
+  return d.getTime()
+}
+
 export function Muraqaba({
   session,
   onComplete,
@@ -61,6 +70,12 @@ export function Muraqaba({
   }, [blocks, currentBlockIndex, musharata])
 
   const [remaining, setRemaining] = useState(totalSeconds)
+  // Total window the timer started with for THIS block — used as the progress-
+  // ring denominator and for computing the minutes-worked on completion. Differs
+  // from `totalSeconds` (the block's planned duration) when the user starts
+  // early or late: the wall-clock target is fixed, so starting early gives a
+  // longer window.
+  const [startedWithSeconds, setStartedWithSeconds] = useState(totalSeconds)
   const [isRunning, setIsRunning] = useState(false)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   // Per-block start timestamp (full-day) or session start (time_block).
@@ -81,6 +96,7 @@ export function Muraqaba({
     }
     if (phase === 'briefing' || phase === 'between') {
       setRemaining(totalSeconds)
+      setStartedWithSeconds(totalSeconds)
     }
   }, [totalSeconds, phase])
 
@@ -107,6 +123,7 @@ export function Muraqaba({
     endTime: number | null
     pauseRemaining: number | null
     isRunning: boolean
+    startedWithSeconds?: number
   }
 
   const applyRestoredState = useCallback((s: PersistedState) => {
@@ -118,6 +135,7 @@ export function Muraqaba({
     setCarriedTasks(s.carriedTasks ?? {})
     blockStartRef.current = s.blockStart ?? ''
     sessionStartRef.current = s.sessionStart ?? ''
+    if (s.startedWithSeconds != null) setStartedWithSeconds(s.startedWithSeconds)
 
     if (s.phase === 'active') {
       if (s.isRunning && s.endTime) {
@@ -171,6 +189,7 @@ export function Muraqaba({
       endTime: isRunning ? endTimeRef.current : null,
       pauseRemaining: isRunning ? null : remaining,
       isRunning,
+      startedWithSeconds,
       savedAt: Date.now(),
     }
     window.localStorage.setItem(storageKey, JSON.stringify(payload))
@@ -190,7 +209,7 @@ export function Muraqaba({
     // Intentionally omit `remaining` from deps — we only snapshot it when
     // isRunning flips (pause). Polling ticks would thrash localStorage.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, currentBlockIndex, driftCount, blockResults, carriedTasks, isRunning, storageKey, supabase, session.id])
+  }, [phase, currentBlockIndex, driftCount, blockResults, carriedTasks, isRunning, startedWithSeconds, storageKey, supabase, session.id])
 
   // Flush any pending DB write on unmount so short-lived states don't get lost.
   useEffect(() => {
@@ -265,11 +284,21 @@ export function Muraqaba({
     const now = new Date()
     blockStartRef.current = now.toISOString()
     if (!sessionStartRef.current) sessionStartRef.current = blockStartRef.current
-    endTimeRef.current = Date.now() + totalSeconds * 1000
-    setRemaining(totalSeconds)
+
+    // Clock-based target: the block's end time today (or, in time_block mode,
+    // the session's chosen end time). Starting early gives a longer window,
+    // starting late gives a shorter one — the anchor is the wall-clock target
+    // (e.g., Maghrib), not a fixed duration from now.
+    const endHHMM = blocks?.[currentBlockIndex]?.end ?? musharata?.time_block_end
+    const target = endHHMM ? endOfBlockTodayMs(endHHMM) : Date.now() + totalSeconds * 1000
+    const actualRemaining = Math.max(1, Math.ceil((target - Date.now()) / 1000))
+
+    endTimeRef.current = target
+    setStartedWithSeconds(actualRemaining)
+    setRemaining(actualRemaining)
     setIsRunning(true)
     setPhase('active')
-  }, [totalSeconds])
+  }, [blocks, currentBlockIndex, musharata, totalSeconds])
 
   const togglePause = () => {
     setIsRunning(prev => {
@@ -303,7 +332,7 @@ export function Muraqaba({
         drift_count: driftCount,
         session_start: blockStartRef.current,
         session_end: end,
-        duration_minutes: Math.round((totalSeconds - remaining) / 60),
+        duration_minutes: Math.round((startedWithSeconds - remaining) / 60),
       }
       setBlockResults(prev => [...prev, result])
       setDriftCount(0)
@@ -317,7 +346,7 @@ export function Muraqaba({
     } else {
       setPhase('complete')
     }
-  }, [blocks, currentBlockIndex, driftCount, remaining, totalSeconds])
+  }, [blocks, currentBlockIndex, driftCount, remaining, startedWithSeconds])
 
   const startNextBlock = useCallback(() => {
     setCurrentBlockIndex(i => i + 1)
@@ -351,14 +380,14 @@ export function Muraqaba({
         drift_count: driftCount,
         session_start: sessionStartRef.current,
         session_end: sessionEnd,
-        duration_minutes: Math.round((totalSeconds - remaining) / 60),
+        duration_minutes: Math.round((startedWithSeconds - remaining) / 60),
       })
     }
   }
 
   const minutes = Math.floor(remaining / 60)
   const seconds = remaining % 60
-  const progress = totalSeconds > 0 ? 1 - remaining / totalSeconds : 0
+  const progress = startedWithSeconds > 0 ? 1 - remaining / startedWithSeconds : 0
   const circumference = 2 * Math.PI * 140
   const strokeOffset = circumference * (1 - progress)
   const glowIntensity = 0.2 + progress * 0.4
@@ -373,7 +402,7 @@ export function Muraqaba({
   // Total session minutes for complete screen
   const completionMinutes = blocks
     ? blockResults.reduce((sum, b) => sum + b.duration_minutes, 0)
-    : Math.round((totalSeconds - remaining) / 60)
+    : Math.round((startedWithSeconds - remaining) / 60)
   const completionDrifts = blocks ? totalDriftCount : driftCount
 
   return (
