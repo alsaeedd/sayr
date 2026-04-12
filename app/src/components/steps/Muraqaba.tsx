@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Play, Pause, Pencil, ArrowRight, Check } from 'lucide-react'
 import { GoldenParticles } from '@/components/GoldenParticles'
+import { createClient } from '@/lib/supabase/client'
 import type { Session, MuraqabaBlockResult } from '@/lib/types'
 
 type Phase = 'briefing' | 'active' | 'between' | 'complete'
@@ -83,52 +84,70 @@ export function Muraqaba({
     }
   }, [totalSeconds, phase])
 
-  // ──── localStorage persistence ────────────────────────────────────
-  // Survives page refresh and tab close on the SAME device/browser.
-  // Does NOT sync across devices — that would need DB-backed state.
+  // ──── State persistence ────────────────────────────────────────────
+  // Dual-write: localStorage (fast, same-device) + Supabase `muraqaba` column
+  // with a `status: 'in_progress'` discriminator (cross-device). On completion
+  // the column is overwritten with the final MuraqabaData payload (no status
+  // field), which naturally clears the in-progress marker.
+  const supabase = useMemo(() => createClient(), [])
   const storageKey = `muraqaba-state:${session.id}`
 
-  // Restore on mount. Runs once.
+  // Debounced DB write — coalesce rapid state changes (drift taps, etc.).
+  const dbSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const latestPayloadRef = useRef<Record<string, unknown> | null>(null)
+
+  type PersistedState = {
+    phase: Phase
+    currentBlockIndex: number
+    driftCount: number
+    blockResults: MuraqabaBlockResult[]
+    carriedTasks: Record<number, Array<{ text: string; bucket?: string }>>
+    blockStart: string
+    sessionStart: string
+    endTime: number | null
+    pauseRemaining: number | null
+    isRunning: boolean
+  }
+
+  const applyRestoredState = useCallback((s: PersistedState) => {
+    restoredRef.current = true
+    setPhase(s.phase)
+    setCurrentBlockIndex(s.currentBlockIndex ?? 0)
+    setDriftCount(s.driftCount ?? 0)
+    setBlockResults(s.blockResults ?? [])
+    setCarriedTasks(s.carriedTasks ?? {})
+    blockStartRef.current = s.blockStart ?? ''
+    sessionStartRef.current = s.sessionStart ?? ''
+
+    if (s.phase === 'active') {
+      if (s.isRunning && s.endTime) {
+        endTimeRef.current = s.endTime
+        const msLeft = s.endTime - Date.now()
+        setRemaining(Math.max(0, Math.ceil(msLeft / 1000)))
+        setIsRunning(true)
+      } else if (s.pauseRemaining != null) {
+        setRemaining(s.pauseRemaining)
+        setIsRunning(false)
+      }
+    }
+  }, [])
+
+  // Restore on mount. DB (cross-device) wins over localStorage (same-device).
   useEffect(() => {
+    // Prefer DB state when it's flagged in-progress.
+    const dbState = session.muraqaba as (Record<string, unknown> | null)
+    if (dbState && dbState.status === 'in_progress') {
+      applyRestoredState(dbState as unknown as PersistedState)
+      return
+    }
+    // Fall back to localStorage for same-device refreshes when the DB hasn't
+    // been written yet (first drift / phase change not yet debounced).
     if (typeof window === 'undefined') return
     const raw = window.localStorage.getItem(storageKey)
     if (!raw) return
     try {
-      const s = JSON.parse(raw) as {
-        phase: Phase
-        currentBlockIndex: number
-        driftCount: number
-        blockResults: MuraqabaBlockResult[]
-        carriedTasks: Record<number, Array<{ text: string; bucket?: string }>>
-        blockStart: string
-        sessionStart: string
-        endTime: number | null
-        pauseRemaining: number | null
-        isRunning: boolean
-      }
-
-      restoredRef.current = true
-      setPhase(s.phase)
-      setCurrentBlockIndex(s.currentBlockIndex ?? 0)
-      setDriftCount(s.driftCount ?? 0)
-      setBlockResults(s.blockResults ?? [])
-      setCarriedTasks(s.carriedTasks ?? {})
-      blockStartRef.current = s.blockStart ?? ''
-      sessionStartRef.current = s.sessionStart ?? ''
-
-      if (s.phase === 'active') {
-        if (s.isRunning && s.endTime) {
-          endTimeRef.current = s.endTime
-          const msLeft = s.endTime - Date.now()
-          setRemaining(Math.max(0, Math.ceil(msLeft / 1000)))
-          setIsRunning(true)
-        } else if (s.pauseRemaining != null) {
-          setRemaining(s.pauseRemaining)
-          setIsRunning(false)
-        }
-      }
+      applyRestoredState(JSON.parse(raw) as PersistedState)
     } catch {
-      // Corrupt state — start fresh.
       window.localStorage.removeItem(storageKey)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -141,7 +160,7 @@ export function Muraqaba({
       window.localStorage.removeItem(storageKey)
       return
     }
-    const payload = {
+    const payload: Record<string, unknown> = {
       phase,
       currentBlockIndex,
       driftCount,
@@ -155,10 +174,38 @@ export function Muraqaba({
       savedAt: Date.now(),
     }
     window.localStorage.setItem(storageKey, JSON.stringify(payload))
+
+    // Debounced DB write (~500ms). Rapid drift taps coalesce into one update.
+    latestPayloadRef.current = { ...payload, status: 'in_progress' }
+    if (dbSaveTimerRef.current) clearTimeout(dbSaveTimerRef.current)
+    dbSaveTimerRef.current = setTimeout(() => {
+      if (!latestPayloadRef.current) return
+      // Fire-and-forget — we don't block the UI on save latency. Errors are
+      // silently dropped; localStorage still has the state on same device.
+      void supabase
+        .from('sessions')
+        .update({ muraqaba: latestPayloadRef.current })
+        .eq('id', session.id)
+    }, 500)
     // Intentionally omit `remaining` from deps — we only snapshot it when
     // isRunning flips (pause). Polling ticks would thrash localStorage.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, currentBlockIndex, driftCount, blockResults, carriedTasks, isRunning, storageKey])
+  }, [phase, currentBlockIndex, driftCount, blockResults, carriedTasks, isRunning, storageKey, supabase, session.id])
+
+  // Flush any pending DB write on unmount so short-lived states don't get lost.
+  useEffect(() => {
+    return () => {
+      if (dbSaveTimerRef.current) {
+        clearTimeout(dbSaveTimerRef.current)
+        if (latestPayloadRef.current) {
+          void supabase
+            .from('sessions')
+            .update({ muraqaba: latestPayloadRef.current })
+            .eq('id', session.id)
+        }
+      }
+    }
+  }, [supabase, session.id])
 
   const toggleCarry = useCallback((targetBlockIdx: number, task: { text: string; bucket?: string }) => {
     setCarriedTasks(prev => {
