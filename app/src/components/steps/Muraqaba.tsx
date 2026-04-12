@@ -1,41 +1,76 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Play, Pause } from 'lucide-react'
+import { Play, Pause, Pencil } from 'lucide-react'
 import { GoldenParticles } from '@/components/GoldenParticles'
-import type { Session } from '@/lib/types'
+import type { Session, MuraqabaBlockResult } from '@/lib/types'
 
-type Phase = 'briefing' | 'active' | 'complete'
+type Phase = 'briefing' | 'active' | 'between' | 'complete'
+
+function durationSecs(start: string, end: string): number {
+  const [sh, sm] = start.split(':').map(Number)
+  const [eh, em] = end.split(':').map(Number)
+  return Math.max((eh * 60 + em) - (sh * 60 + sm), 1) * 60
+}
 
 export function Muraqaba({
   session,
   onComplete,
+  onEditMusharata,
 }: {
   session: Session
   onComplete: (data: Record<string, unknown>) => void
+  onEditMusharata?: () => void
 }) {
   const musharata = session.musharata
-  const [phase, setPhase] = useState<Phase>('briefing')
-  const [driftCount, setDriftCount] = useState(0)
-  const [driftKey, setDriftKey] = useState(0) // for ripple re-trigger
+  const isFullDay = musharata?.mode === 'full_day' && !!musharata.blocks?.length
+  const blocks = useMemo(
+    () => (isFullDay ? musharata!.blocks! : null),
+    [isFullDay, musharata],
+  )
 
-  const totalSeconds = musharata
-    ? (() => {
-        const [sh, sm] = musharata.time_block_start.split(':').map(Number)
-        const [eh, em] = musharata.time_block_end.split(':').map(Number)
-        const diff = (eh * 60 + em) - (sh * 60 + sm)
-        return Math.max(diff, 1) * 60
-      })()
-    : 60 * 60
+  const [phase, setPhase] = useState<Phase>('briefing')
+  const [currentBlockIndex, setCurrentBlockIndex] = useState(0)
+  const [driftCount, setDriftCount] = useState(0) // drifts in current block (or overall for time_block)
+  const [driftKey, setDriftKey] = useState(0) // for ripple re-trigger
+  const [blockResults, setBlockResults] = useState<MuraqabaBlockResult[]>([])
+
+  // Total drifts across all blocks (full-day) — time_block uses driftCount directly.
+  const totalDriftCount = useMemo(
+    () => blockResults.reduce((sum, b) => sum + b.drift_count, 0) + driftCount,
+    [blockResults, driftCount],
+  )
+
+  // Current countdown duration: current block for full-day, whole time_block otherwise.
+  const totalSeconds = useMemo(() => {
+    if (blocks && blocks[currentBlockIndex]) {
+      return durationSecs(blocks[currentBlockIndex].start, blocks[currentBlockIndex].end)
+    }
+    if (musharata) {
+      return durationSecs(musharata.time_block_start, musharata.time_block_end)
+    }
+    return 60 * 60
+  }, [blocks, currentBlockIndex, musharata])
 
   const [remaining, setRemaining] = useState(totalSeconds)
   const [isRunning, setIsRunning] = useState(false)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  const startTimeRef = useRef<string>('')
+  // Per-block start timestamp (full-day) or session start (time_block).
+  const blockStartRef = useRef<string>('')
+  // First block start (full-day) or session start (time_block) — used in final payload.
+  const sessionStartRef = useRef<string>('')
   // Wall-clock target: absolute ms timestamp the timer should end at.
   // Source of truth — survives background-tab throttling of setInterval.
   const endTimeRef = useRef<number | null>(null)
+
+  // Keep `remaining` in sync with `totalSeconds` whenever the current block changes
+  // (and on initial mount).
+  useEffect(() => {
+    if (phase === 'briefing' || phase === 'between') {
+      setRemaining(totalSeconds)
+    }
+  }, [totalSeconds, phase])
 
   useEffect(() => {
     if (!isRunning) return
@@ -47,17 +82,14 @@ export function Muraqaba({
       setRemaining(secsLeft)
       if (secsLeft <= 0) {
         setIsRunning(false)
-        setPhase('complete')
+        // Record and transition — useEffect runs after the setIsRunning(false)
+        // commits, so we can safely call recordBlockEnd() from a handler instead.
       }
     }
 
-    // Tick every 250ms — cheap, and smooths the display if a background
-    // throttle caused us to "jump" on return.
     tick()
     intervalRef.current = setInterval(tick, 250)
 
-    // When the tab becomes visible again, browsers may have been
-    // suspending the interval — recompute immediately from wall clock.
     const onVisibility = () => {
       if (document.visibilityState === 'visible') tick()
     }
@@ -69,24 +101,34 @@ export function Muraqaba({
     }
   }, [isRunning])
 
-  const startSession = () => {
-    startTimeRef.current = new Date().toISOString()
-    endTimeRef.current = Date.now() + remaining * 1000
+  // When the timer hits 0, end the current block. Kept as an effect so we only
+  // fire once even if setState batches oddly.
+  useEffect(() => {
+    if (phase === 'active' && !isRunning && remaining === 0) {
+      endCurrentBlock()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, isRunning, remaining])
+
+  const startBlockTimer = useCallback(() => {
+    const now = new Date()
+    blockStartRef.current = now.toISOString()
+    if (!sessionStartRef.current) sessionStartRef.current = blockStartRef.current
+    endTimeRef.current = Date.now() + totalSeconds * 1000
+    setRemaining(totalSeconds)
     setIsRunning(true)
     setPhase('active')
-  }
+  }, [totalSeconds])
 
   const togglePause = () => {
     setIsRunning(prev => {
       if (prev) {
-        // Pausing: freeze remaining from the wall clock, drop the target.
         if (endTimeRef.current != null) {
           const msLeft = endTimeRef.current - Date.now()
           setRemaining(Math.max(0, Math.ceil(msLeft / 1000)))
         }
         endTimeRef.current = null
       } else {
-        // Resuming: re-anchor the end time to now + remaining.
         endTimeRef.current = Date.now() + remaining * 1000
       }
       return !prev
@@ -98,28 +140,83 @@ export function Muraqaba({
     setDriftKey(prev => prev + 1)
   }
 
-  const handleFinishEarly = useCallback(() => {
+  // Record the just-finished block and move to 'between' (or 'complete' if last).
+  const endCurrentBlock = useCallback(() => {
     setIsRunning(false)
-    setPhase('complete')
-  }, [])
+
+    if (blocks) {
+      const block = blocks[currentBlockIndex]
+      const end = new Date().toISOString()
+      const result: MuraqabaBlockResult = {
+        label: block.label,
+        drift_count: driftCount,
+        session_start: blockStartRef.current,
+        session_end: end,
+        duration_minutes: Math.round((totalSeconds - remaining) / 60),
+      }
+      setBlockResults(prev => [...prev, result])
+      setDriftCount(0)
+
+      const isLast = currentBlockIndex >= blocks.length - 1
+      if (isLast) {
+        setPhase('complete')
+      } else {
+        setPhase('between')
+      }
+    } else {
+      setPhase('complete')
+    }
+  }, [blocks, currentBlockIndex, driftCount, remaining, totalSeconds])
+
+  const startNextBlock = useCallback(() => {
+    setCurrentBlockIndex(i => i + 1)
+    // The `remaining` sync effect resets the clock to the new block's duration
+    // (phase is 'between' here). Then we kick off. Use a microtask so the effect
+    // commits first.
+    setTimeout(() => startBlockTimer(), 0)
+  }, [startBlockTimer])
 
   const handleComplete = () => {
-    onComplete({
-      drift_count: driftCount,
-      session_start: startTimeRef.current,
-      session_end: new Date().toISOString(),
-      duration_minutes: Math.round((totalSeconds - remaining) / 60),
-    })
+    const sessionEnd = new Date().toISOString()
+
+    if (blocks) {
+      const totalMinutes = blockResults.reduce((sum, b) => sum + b.duration_minutes, 0)
+      onComplete({
+        mode: 'full_day',
+        blocks: blockResults,
+        drift_count: totalDriftCount,
+        session_start: sessionStartRef.current,
+        session_end: sessionEnd,
+        duration_minutes: totalMinutes,
+      })
+    } else {
+      onComplete({
+        mode: 'time_block',
+        drift_count: driftCount,
+        session_start: sessionStartRef.current,
+        session_end: sessionEnd,
+        duration_minutes: Math.round((totalSeconds - remaining) / 60),
+      })
+    }
   }
 
   const minutes = Math.floor(remaining / 60)
   const seconds = remaining % 60
-  const progress = 1 - remaining / totalSeconds
+  const progress = totalSeconds > 0 ? 1 - remaining / totalSeconds : 0
   const circumference = 2 * Math.PI * 140
   const strokeOffset = circumference * (1 - progress)
-
-  // Timer ring glow intensifies with progress
   const glowIntensity = 0.2 + progress * 0.4
+
+  const currentBlock = blocks?.[currentBlockIndex]
+  const tasksForCurrentBlock = currentBlock
+    ? musharata?.blocks?.find(b => b.label === currentBlock.label)?.tasks ?? []
+    : []
+
+  // Total session minutes for complete screen
+  const completionMinutes = blocks
+    ? blockResults.reduce((sum, b) => sum + b.duration_minutes, 0)
+    : Math.round((totalSeconds - remaining) / 60)
+  const completionDrifts = blocks ? totalDriftCount : driftCount
 
   return (
     <div className="pt-4">
@@ -140,25 +237,83 @@ export function Muraqaba({
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.1, type: 'spring', stiffness: 200, damping: 22 }}
               >
-                <h3 className="text-text-primary text-sm font-medium">Your contract this session</h3>
-                <ul className="space-y-2">
-                  {musharata.tasks.map((task, i) => (
-                    <motion.li
-                      key={i}
-                      className="text-text-secondary text-sm flex items-start gap-2"
-                      initial={{ opacity: 0, x: -8 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: 0.2 + i * 0.06 }}
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-text-primary text-sm font-medium">Your contract this session</h3>
+                  {onEditMusharata && (
+                    <motion.button
+                      onClick={onEditMusharata}
+                      className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border border-border-subtle text-text-muted hover:text-gold hover:border-gold/30 transition-all"
+                      whileTap={{ scale: 0.95 }}
                     >
-                      <span className="text-gold mt-0.5">&#x2022;</span>
-                      {task.text}
-                    </motion.li>
-                  ))}
-                </ul>
-                <div className="flex gap-4 text-xs text-text-muted pt-2 border-t border-border-subtle">
-                  <span>{musharata.time_block_start} — {musharata.time_block_end}</span>
-                  <span>{Math.round(totalSeconds / 60)} minutes</span>
+                      <Pencil size={11} />
+                      Edit
+                    </motion.button>
+                  )}
                 </div>
+
+                {blocks ? (
+                  <div className="space-y-3">
+                    {blocks.map((b, i) => {
+                      const blockTasks = musharata.blocks?.find(x => x.label === b.label)?.tasks ?? []
+                      return (
+                        <motion.div
+                          key={`block-brief-${i}`}
+                          initial={{ opacity: 0, x: -8 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: 0.2 + i * 0.06 }}
+                          className="border-l-2 border-gold/20 pl-3 space-y-1"
+                        >
+                          <div className="flex items-center justify-between text-xs">
+                            <p className="text-text-primary font-medium">{b.label}</p>
+                            <p className="text-text-muted tabular-nums">{b.start} — {b.end}</p>
+                          </div>
+                          <ul className="space-y-0.5">
+                            {blockTasks.map((t, ti) => (
+                              <li key={ti} className="text-text-secondary text-xs flex items-start gap-2">
+                                <span className="text-gold-dim mt-0.5">·</span>
+                                {t.text}
+                                {t.bucket && (
+                                  <span className="text-gold/60 text-[10px] uppercase tracking-wider ml-1">
+                                    {t.bucket}
+                                  </span>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </motion.div>
+                      )
+                    })}
+                    <div className="flex gap-4 text-xs text-text-muted pt-2 border-t border-border-subtle">
+                      <span>{blocks.length} blocks</span>
+                      <span>
+                        {Math.round(
+                          blocks.reduce((sum, b) => sum + durationSecs(b.start, b.end) / 60, 0),
+                        )} minutes total
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <ul className="space-y-2">
+                      {musharata.tasks.map((task, i) => (
+                        <motion.li
+                          key={i}
+                          className="text-text-secondary text-sm flex items-start gap-2"
+                          initial={{ opacity: 0, x: -8 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: 0.2 + i * 0.06 }}
+                        >
+                          <span className="text-gold mt-0.5">&#x2022;</span>
+                          {task.text}
+                        </motion.li>
+                      ))}
+                    </ul>
+                    <div className="flex gap-4 text-xs text-text-muted pt-2 border-t border-border-subtle">
+                      <span>{musharata.time_block_start} — {musharata.time_block_end}</span>
+                      <span>{Math.round(totalSeconds / 60)} minutes</span>
+                    </div>
+                  </>
+                )}
               </motion.div>
             )}
 
@@ -185,7 +340,7 @@ export function Muraqaba({
             </motion.div>
 
             <motion.button
-              onClick={startSession}
+              onClick={startBlockTimer}
               className="btn-gold w-full text-base flex items-center justify-center gap-2"
               initial={{ opacity: 0, y: 12 }}
               animate={{ opacity: 1, y: 0 }}
@@ -194,7 +349,7 @@ export function Muraqaba({
               whileTap={{ scale: 0.98 }}
             >
               <Play size={18} />
-              Start Session
+              {blocks ? `Start "${blocks[0].label}"` : 'Start Session'}
             </motion.button>
           </motion.div>
         )}
@@ -208,9 +363,38 @@ export function Muraqaba({
             transition={{ type: 'spring', stiffness: 150, damping: 22 }}
             className="flex flex-col items-center space-y-6 pt-4"
           >
+            {blocks && currentBlock && (
+              <motion.div
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="text-center space-y-1"
+              >
+                <p className="text-text-muted text-[11px] uppercase tracking-[0.15em]">
+                  Block {currentBlockIndex + 1} of {blocks.length}
+                </p>
+                <p className="text-gold text-sm font-medium">{currentBlock.label}</p>
+              </motion.div>
+            )}
+
+            {/* Tasks for current block */}
+            {blocks && tasksForCurrentBlock.length > 0 && (
+              <motion.ul
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.1 }}
+                className="glass-card px-4 py-3 space-y-1 w-full max-w-sm"
+              >
+                {tasksForCurrentBlock.map((t, i) => (
+                  <li key={i} className="text-text-secondary text-xs flex items-start gap-2">
+                    <span className="text-gold-dim mt-0.5">·</span>
+                    {t.text}
+                  </li>
+                ))}
+              </motion.ul>
+            )}
+
             {/* Timer circle with breathing glow */}
             <div className="relative w-[260px] h-[260px]">
-              {/* Ambient glow behind timer */}
               <motion.div
                 className="timer-glow"
                 animate={{ opacity: glowIntensity }}
@@ -255,7 +439,6 @@ export function Muraqaba({
               </div>
             </div>
 
-            {/* Controls */}
             <motion.button
               onClick={togglePause}
               className="btn-ghost flex items-center gap-2"
@@ -277,7 +460,6 @@ export function Muraqaba({
               </AnimatePresence>
             </motion.button>
 
-            {/* Drift counter with ripple */}
             <motion.button
               key={driftKey}
               onClick={handleDrift}
@@ -300,13 +482,15 @@ export function Muraqaba({
                     animate={{ opacity: 1, height: 'auto' }}
                     className="text-text-muted text-xs mt-1"
                   >
-                    {driftCount} {driftCount === 1 ? 'time' : 'times'} — just data, not shame
+                    {driftCount} {driftCount === 1 ? 'time' : 'times'} this block
+                    {blocks && totalDriftCount > driftCount && (
+                      <span className="text-text-muted/60"> · {totalDriftCount} total</span>
+                    )}
                   </motion.p>
                 )}
               </AnimatePresence>
             </motion.button>
 
-            {/* Dhikr reminder — breathing */}
             <motion.p
               className="arabic text-gold/30 text-sm text-center"
               animate={{
@@ -323,15 +507,83 @@ export function Muraqaba({
               لا حول ولا قوة إلا بالله
             </motion.p>
 
-            {/* Finish early */}
             <motion.button
-              onClick={handleFinishEarly}
+              onClick={endCurrentBlock}
               className="text-text-muted text-xs hover:text-text-secondary"
               whileHover={{ opacity: 0.8 }}
               transition={{ duration: 0.2 }}
             >
-              Finish session early
+              {blocks ? 'Finish this block early' : 'Finish session early'}
             </motion.button>
+          </motion.div>
+        )}
+
+        {phase === 'between' && blocks && (
+          <motion.div
+            key={`between-${currentBlockIndex}`}
+            initial={{ opacity: 0, scale: 0.96, filter: 'blur(4px)' }}
+            animate={{ opacity: 1, scale: 1, filter: 'blur(0px)' }}
+            exit={{ opacity: 0, y: -12 }}
+            transition={{ type: 'spring', stiffness: 200, damping: 24 }}
+            className="space-y-6 text-center pt-8"
+          >
+            <div className="space-y-2">
+              <p className="text-text-muted text-[11px] uppercase tracking-[0.15em]">
+                Block {currentBlockIndex + 1} of {blocks.length} complete
+              </p>
+              <h3 className="text-xl text-text-primary font-light">
+                {blocks[currentBlockIndex].label}
+              </h3>
+              {blockResults[blockResults.length - 1] && (
+                <p className="text-text-secondary text-sm">
+                  {blockResults[blockResults.length - 1].duration_minutes} min ·{' '}
+                  {blockResults[blockResults.length - 1].drift_count} drifts
+                </p>
+              )}
+            </div>
+
+            {/* Up next preview */}
+            <motion.div
+              className="glass-card p-5 space-y-3 max-w-md mx-auto text-left"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+            >
+              <div className="flex items-center justify-between">
+                <p className="text-text-muted text-[11px] uppercase tracking-[0.15em]">Up next</p>
+                <p className="text-text-muted text-xs tabular-nums">
+                  {blocks[currentBlockIndex + 1]?.start} — {blocks[currentBlockIndex + 1]?.end}
+                </p>
+              </div>
+              <p className="text-gold text-sm font-medium">{blocks[currentBlockIndex + 1]?.label}</p>
+              <ul className="space-y-0.5">
+                {(musharata?.blocks?.find(b => b.label === blocks[currentBlockIndex + 1]?.label)?.tasks ?? []).map((t, i) => (
+                  <li key={i} className="text-text-secondary text-xs flex items-start gap-2">
+                    <span className="text-gold-dim mt-0.5">·</span>
+                    {t.text}
+                  </li>
+                ))}
+              </ul>
+            </motion.div>
+
+            <div className="flex flex-col items-center gap-2">
+              <motion.button
+                onClick={startNextBlock}
+                className="btn-gold inline-flex items-center gap-2"
+                whileHover={{ scale: 1.03 }}
+                whileTap={{ scale: 0.97 }}
+              >
+                <Play size={16} />
+                Start next block
+              </motion.button>
+              <motion.button
+                onClick={() => setPhase('complete')}
+                className="text-text-muted text-xs hover:text-text-secondary"
+                whileHover={{ opacity: 0.8 }}
+              >
+                Finish session here
+              </motion.button>
+            </div>
           </motion.div>
         )}
 
@@ -344,12 +596,10 @@ export function Muraqaba({
             transition={{ type: 'spring', stiffness: 150, damping: 20 }}
             className="space-y-6 text-center pt-12 relative"
           >
-            {/* Golden particles — the transcendent moment */}
             <div className="absolute inset-0 -top-20 overflow-hidden pointer-events-none">
               <GoldenParticles count={32} speed={0.8} />
             </div>
 
-            {/* Radiant backdrop */}
             <motion.div
               className="absolute top-8 left-1/2 -translate-x-1/2 w-[300px] h-[300px] rounded-full pointer-events-none"
               initial={{ opacity: 0, scale: 0.5 }}
@@ -389,14 +639,33 @@ export function Muraqaba({
                 animate={{ opacity: 1 }}
                 transition={{ delay: 0.6 }}
               >
-                {Math.round((totalSeconds - remaining) / 60)} minutes of focused work.
-                {driftCount === 0
+                {completionMinutes} minutes of focused work.
+                {completionDrifts === 0
                   ? ' No drifts recorded — unwavering focus.'
-                  : driftCount <= 2
-                  ? ` You drifted ${driftCount} ${driftCount === 1 ? 'time' : 'times'} — and returned each time. That is muraqaba.`
-                  : ` You drifted ${driftCount} times — and came back ${driftCount} times. The return is what matters.`}
+                  : completionDrifts <= 2
+                  ? ` You drifted ${completionDrifts} ${completionDrifts === 1 ? 'time' : 'times'} — and returned each time. That is muraqaba.`
+                  : ` You drifted ${completionDrifts} times — and came back ${completionDrifts} times. The return is what matters.`}
               </motion.p>
             </motion.div>
+
+            {blocks && blockResults.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.7 }}
+                className="glass-card p-4 space-y-2 max-w-md mx-auto text-left relative z-10"
+              >
+                <p className="text-text-muted text-[11px] uppercase tracking-[0.15em]">Per block</p>
+                {blockResults.map((b, i) => (
+                  <div key={i} className="flex justify-between text-xs">
+                    <span className="text-text-secondary">{b.label}</span>
+                    <span className="text-text-muted tabular-nums">
+                      {b.duration_minutes}m · {b.drift_count} drifts
+                    </span>
+                  </div>
+                ))}
+              </motion.div>
+            )}
 
             <motion.button
               onClick={handleComplete}

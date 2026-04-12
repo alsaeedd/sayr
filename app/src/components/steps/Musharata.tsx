@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, X, Clock, Layers } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
-import type { Session, PrayerTimes } from '@/lib/types'
+import type { Session, PrayerTimes, MusharataData } from '@/lib/types'
 
 const stagger = {
   hidden: { opacity: 0 },
@@ -55,35 +55,64 @@ type BlockDraft = {
 
 export function Musharata({
   session,
-  mode = 'time_block',
+  mode: modeProp,
+  initialData,
+  submitLabel = 'Begin Session',
   onComplete,
+  onCancel,
 }: {
   session: Session
   mode?: 'time_block' | 'full_day'
+  initialData?: MusharataData | null
+  submitLabel?: string
   onComplete: (data: Record<string, unknown>) => void
+  onCancel?: () => void
 }) {
+  // Mode: explicit prop wins, else inferred from initialData, else time_block.
+  const mode: 'time_block' | 'full_day' =
+    modeProp ?? (initialData?.mode === 'full_day' ? 'full_day' : 'time_block')
+
   const supabase = useMemo(() => createClient(), [])
-  const [tasks, setTasks] = useState<string[]>([''])
+
+  // Seed state from initialData when editing; empty defaults when creating.
+  const seedTaskList = initialData?.tasks.map(t => t.text) ?? ['']
+  const seedTaskBuckets = initialData?.tasks.map(t => t.bucket || '') ?? ['']
+  const seedAvoidances = initialData?.avoidances.length
+    ? [...initialData.avoidances, '']
+    : ['']
+  const seedBoundaries = initialData?.boundaries.length
+    ? [...initialData.boundaries, '']
+    : ['']
+  const seedUseBuckets = !!initialData?.tasks.some(t => t.bucket)
+
+  const [tasks, setTasks] = useState<string[]>(seedTaskList)
   // Parallel to `tasks`: the bucket assigned to each task (empty string = none).
-  const [taskBuckets, setTaskBuckets] = useState<string[]>([''])
-  const [avoidances, setAvoidances] = useState<string[]>([''])
-  const [boundaries, setBoundaries] = useState<string[]>([''])
+  const [taskBuckets, setTaskBuckets] = useState<string[]>(seedTaskBuckets)
+  const [avoidances, setAvoidances] = useState<string[]>(seedAvoidances)
+  const [boundaries, setBoundaries] = useState<string[]>(seedBoundaries)
   const [buckets, setBuckets] = useState<string[]>([])
-  const [useBuckets, setUseBuckets] = useState(false)
+  const [useBuckets, setUseBuckets] = useState(seedUseBuckets)
   const [presetsLoaded, setPresetsLoaded] = useState(false)
-  const [timeBlockStart, setTimeBlockStart] = useState('')
-  const [timeBlockEnd, setTimeBlockEnd] = useState('')
+  const [timeBlockStart, setTimeBlockStart] = useState(initialData?.time_block_start ?? '')
+  const [timeBlockEnd, setTimeBlockEnd] = useState(initialData?.time_block_end ?? '')
   const [timeError, setTimeError] = useState('')
   const [prayerTimes, setPrayerTimes] = useState<PrayerTimes | null>(null)
-  const [duaRecited, setDuaRecited] = useState(false)
+  const [duaRecited, setDuaRecited] = useState(initialData?.dua_recited ?? false)
   const [selectedPrayer, setSelectedPrayer] = useState<string | null>(null)
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null)
 
   // Full-day mode: schedule of blocks, each with its own task list.
   // One block at start; user can add/remove and auto-fill from prayer times.
-  const [blocks, setBlocks] = useState<BlockDraft[]>([
-    { label: '', start: '', end: '', tasks: [''], taskBuckets: [''] },
-  ])
+  const seedBlocks: BlockDraft[] = initialData?.blocks?.length
+    ? initialData.blocks.map(b => ({
+        label: b.label,
+        start: b.start,
+        end: b.end,
+        tasks: b.tasks.length ? b.tasks.map(t => t.text) : [''],
+        taskBuckets: b.tasks.length ? b.tasks.map(t => t.bucket || '') : [''],
+      }))
+    : [{ label: '', start: '', end: '', tasks: [''], taskBuckets: [''] }]
+  const [blocks, setBlocks] = useState<BlockDraft[]>(seedBlocks)
 
   // Refs for focusing next input on Enter
   const taskRefs = useRef<(HTMLInputElement | null)[]>([])
@@ -496,21 +525,21 @@ export function Musharata({
                 )}
               </div>
               {useBuckets && buckets.length > 0 && (
-                <div className="flex items-center gap-1.5 pl-1">
-                  <Layers size={11} className="text-text-muted shrink-0" />
+                <div className="flex items-center gap-2 pl-1">
+                  <Layers size={13} className={taskBuckets[i] ? 'text-gold shrink-0' : 'text-text-muted shrink-0'} />
                   <select
                     value={taskBuckets[i] || ''}
                     onChange={(e) =>
                       setTaskBuckets(prev => prev.map((b, idx) => (idx === i ? e.target.value : b)))
                     }
-                    className={`text-xs py-0.5 px-2 rounded-md border cursor-pointer transition-all bg-transparent max-w-full ${
+                    className={`text-sm py-1.5 px-3 rounded-lg border cursor-pointer transition-all font-medium max-w-full ${
                       taskBuckets[i]
-                        ? 'border-gold/25 text-gold bg-gold/[0.04]'
-                        : 'border-border-subtle text-text-muted hover:text-text-secondary hover:border-border-accent'
+                        ? 'border-gold/50 text-gold bg-gold/[0.1] shadow-[0_0_0_3px_rgba(212,175,55,0.04)]'
+                        : 'border-border-accent text-text-secondary bg-bg-elevated/40 hover:text-gold hover:border-gold/40'
                     }`}
                     aria-label="Bucket"
                   >
-                    <option value="">No bucket</option>
+                    <option value="">— No bucket —</option>
                     {buckets.map(b => (
                       <option key={b} value={b}>{b}</option>
                     ))}
@@ -753,19 +782,19 @@ export function Musharata({
                           )}
                         </div>
                         {useBuckets && buckets.length > 0 && (
-                          <div className="flex items-center gap-1.5 pl-1">
-                            <Layers size={11} className="text-text-muted shrink-0" />
+                          <div className="flex items-center gap-2 pl-1">
+                            <Layers size={13} className={block.taskBuckets[ti] ? 'text-gold shrink-0' : 'text-text-muted shrink-0'} />
                             <select
                               value={block.taskBuckets[ti] || ''}
                               onChange={(e) => updateBlockTaskBucket(bi, ti, e.target.value)}
-                              className={`text-xs py-0.5 px-2 rounded-md border cursor-pointer transition-all bg-transparent max-w-full ${
+                              className={`text-sm py-1.5 px-3 rounded-lg border cursor-pointer transition-all font-medium max-w-full ${
                                 block.taskBuckets[ti]
-                                  ? 'border-gold/25 text-gold bg-gold/[0.04]'
-                                  : 'border-border-subtle text-text-muted hover:text-text-secondary hover:border-border-accent'
+                                  ? 'border-gold/50 text-gold bg-gold/[0.1] shadow-[0_0_0_3px_rgba(212,175,55,0.04)]'
+                                  : 'border-border-accent text-text-secondary bg-bg-elevated/40 hover:text-gold hover:border-gold/40'
                               }`}
                               aria-label="Bucket"
                             >
-                              <option value="">No bucket</option>
+                              <option value="">— No bucket —</option>
                               {buckets.map(b => (
                                 <option key={b} value={b}>{b}</option>
                               ))}
@@ -864,7 +893,7 @@ export function Musharata({
       </motion.div>
 
       {/* Submit */}
-      <motion.div variants={fadeUp} className="pt-2">
+      <motion.div variants={fadeUp} className="pt-2 space-y-2">
         <motion.button
           onClick={handleSubmit}
           disabled={!canProceed}
@@ -874,8 +903,17 @@ export function Musharata({
           animate={{ opacity: canProceed ? 1 : 0.35 }}
           transition={{ type: 'spring', stiffness: 400, damping: 25 }}
         >
-          Begin Session
+          {submitLabel}
         </motion.button>
+        {onCancel && (
+          <motion.button
+            onClick={onCancel}
+            className="btn-ghost w-full text-sm"
+            whileTap={{ scale: 0.98 }}
+          >
+            Cancel
+          </motion.button>
+        )}
       </motion.div>
     </motion.div>
   )

@@ -5,7 +5,8 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
-import type { Session } from '@/lib/types'
+import type { Session, MusharataData } from '@/lib/types'
+import { Musharata } from '@/components/steps/Musharata'
 import { Muraqaba } from '@/components/steps/Muraqaba'
 import { Muhasaba } from '@/components/steps/Muhasaba'
 import { Muaqaba } from '@/components/steps/Muaqaba'
@@ -42,10 +43,35 @@ const slideVariants = {
 export function SessionFlow({ session: initialSession }: { session: Session }) {
   const [session, setSession] = useState(initialSession)
   const [direction, setDirection] = useState(1)
+  const [editingMusharata, setEditingMusharata] = useState(false)
   const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
 
   const currentStep = session.current_step
+
+  const handleMusharataEdit = useCallback(async (data: Record<string, unknown>) => {
+    // Build the updated MusharataData payload. Mirror NewSessionFlow's insert
+    // shape but apply it as an update to the existing session row.
+    const mode = session.musharata?.mode ?? 'time_block'
+    const musharataPayload = {
+      mode,
+      tasks: data.tasks,
+      blocks: data.blocks,
+      avoidances: data.avoidances,
+      boundaries: data.boundaries,
+      time_block_start: data.time_block_start,
+      time_block_end: data.time_block_end,
+      dua_recited: data.dua_recited,
+    }
+
+    await supabase
+      .from('sessions')
+      .update({ musharata: musharataPayload })
+      .eq('id', session.id)
+
+    setSession(prev => ({ ...prev, musharata: musharataPayload as MusharataData }))
+    setEditingMusharata(false)
+  }, [session.id, session.musharata, supabase])
 
   const saveAndAdvance = useCallback(async (stepData: Record<string, unknown>, stepKey: string) => {
     const nextStep = currentStep + 1
@@ -83,7 +109,7 @@ export function SessionFlow({ session: initialSession }: { session: Session }) {
       [stepKey]: stepData,
       current_step: nextStep,
     } as Session))
-  }, [currentStep, session.id, supabase, router])
+  }, [currentStep, session, supabase, router])
 
   const startNewSession = useCallback(() => {
     router.push('/dashboard?new=1')
@@ -96,7 +122,13 @@ export function SessionFlow({ session: initialSession }: { session: Session }) {
         router.push('/session/new')
         return null
       case 2:
-        return <Muraqaba session={session} onComplete={(data) => saveAndAdvance(data, 'muraqaba')} />
+        return (
+          <Muraqaba
+            session={session}
+            onComplete={(data) => saveAndAdvance(data, 'muraqaba')}
+            onEditMusharata={() => setEditingMusharata(true)}
+          />
+        )
       case 3:
         return <Muhasaba session={session} onComplete={(data) => saveAndAdvance(data, 'muhasaba')} />
       case 4:
@@ -167,7 +199,7 @@ export function SessionFlow({ session: initialSession }: { session: Session }) {
         <div className="max-w-2xl mx-auto text-center space-y-1">
           <AnimatePresence mode="wait">
             <motion.div
-              key={currentStep}
+              key={editingMusharata ? 'edit-musharata' : currentStep}
               initial={{ opacity: 0, y: -16, filter: 'blur(4px)' }}
               animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
               exit={{ opacity: 0, y: 16, filter: 'blur(4px)' }}
@@ -178,13 +210,15 @@ export function SessionFlow({ session: initialSession }: { session: Session }) {
                 className="arabic text-gold text-2xl"
                 style={{ textShadow: '0 0 24px rgba(212, 175, 55, 0.18)' }}
               >
-                {STEPS[currentStep - 1].ar}
+                {editingMusharata ? STEPS[0].ar : STEPS[currentStep - 1].ar}
               </p>
               <h2 className="text-2xl font-light text-text-primary tracking-[-0.02em]">
-                {STEPS[currentStep - 1].en}
+                {editingMusharata ? `${STEPS[0].en} — editing` : STEPS[currentStep - 1].en}
               </h2>
               <p className="text-text-muted text-xs tracking-wide mt-0.5">
-                Step {currentStep} of 6 — {STEPS[currentStep - 1].subtitle}
+                {editingMusharata
+                  ? 'Update your contract'
+                  : `Step ${currentStep} of 6 — ${STEPS[currentStep - 1].subtitle}`}
               </p>
             </motion.div>
           </AnimatePresence>
@@ -195,22 +229,40 @@ export function SessionFlow({ session: initialSession }: { session: Session }) {
       <div className="flex-1 px-6 pb-12 overflow-hidden relative z-10">
         <div className="max-w-2xl mx-auto w-full">
           <AnimatePresence mode="wait" custom={direction}>
-            <motion.div
-              key={currentStep}
-              custom={direction}
-              variants={slideVariants}
-              initial="enter"
-              animate="center"
-              exit="exit"
-              transition={{
-                type: 'spring',
-                stiffness: 200,
-                damping: 26,
-                mass: 0.8,
-              }}
-            >
-              {renderStep()}
-            </motion.div>
+            {editingMusharata ? (
+              <motion.div
+                key="editing-musharata"
+                initial={{ opacity: 0, y: 16, filter: 'blur(4px)' }}
+                animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                exit={{ opacity: 0, y: -16, filter: 'blur(4px)' }}
+                transition={{ type: 'spring', stiffness: 200, damping: 26 }}
+              >
+                <Musharata
+                  session={session}
+                  initialData={session.musharata}
+                  submitLabel="Save changes"
+                  onComplete={handleMusharataEdit}
+                  onCancel={() => setEditingMusharata(false)}
+                />
+              </motion.div>
+            ) : (
+              <motion.div
+                key={currentStep}
+                custom={direction}
+                variants={slideVariants}
+                initial="enter"
+                animate="center"
+                exit="exit"
+                transition={{
+                  type: 'spring',
+                  stiffness: 200,
+                  damping: 26,
+                  mass: 0.8,
+                }}
+              >
+                {renderStep()}
+              </motion.div>
+            )}
           </AnimatePresence>
         </div>
       </div>

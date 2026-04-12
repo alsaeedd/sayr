@@ -55,11 +55,22 @@ export interface MusharataData {
   dua_recited: boolean
 }
 
-export interface MuraqabaData {
+export interface MuraqabaBlockResult {
+  label: string
   drift_count: number
   session_start: string
   session_end: string
   duration_minutes: number
+}
+
+export interface MuraqabaData {
+  mode?: 'time_block' | 'full_day'
+  drift_count: number
+  session_start: string
+  session_end: string
+  duration_minutes: number
+  // Only present when mode === 'full_day'.
+  blocks?: MuraqabaBlockResult[]
 }
 
 export interface MuhasabaData {
