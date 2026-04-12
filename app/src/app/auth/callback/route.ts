@@ -62,10 +62,20 @@ export async function GET(request: Request) {
 
   if (error) {
     // Surface it in logs so we can see *why* intermittent failures happen.
+    // Also dump cookie names so we can tell whether the PKCE verifier cookie
+    // even reached the callback (vs. was set in localStorage on the client).
+    const cookieNames = request.headers
+      .get('cookie')
+      ?.split('; ')
+      .map(c => c.split('=')[0])
+      .filter(Boolean) ?? []
+    const supabaseCookies = cookieNames.filter(n => n.startsWith('sb-'))
     console.error('[auth/callback] exchangeCodeForSession failed:', {
       message: error.message,
       status: error.status,
       name: error.name,
+      cookieCount: cookieNames.length,
+      supabaseCookies,
     })
     return fail(error.message.replace(/\s+/g, '_').toLowerCase().slice(0, 60))
   }
