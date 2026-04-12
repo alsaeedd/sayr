@@ -12,9 +12,11 @@ const STEP = { ar: 'المشارطة', en: 'Musharata', subtitle: 'Set your cond
 export function NewSessionFlow({
   userId,
   sessionName,
+  sessionMode,
 }: {
   userId: string
   sessionName: string | null
+  sessionMode: 'time_block' | 'full_day'
 }) {
   const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
@@ -39,7 +41,9 @@ export function NewSessionFlow({
         current_step: 2,
         status: 'active',
         musharata: {
+          mode: sessionMode,
           tasks: data.tasks,
+          blocks: data.blocks,
           avoidances: data.avoidances,
           boundaries: data.boundaries,
           time_block_start: data.time_block_start,
@@ -53,7 +57,7 @@ export function NewSessionFlow({
     if (!error && session) {
       router.replace(`/session/${session.id}`)
     }
-  }, [supabase, userId, sessionName, router])
+  }, [supabase, userId, sessionName, sessionMode, router])
 
   // Dummy session object for Musharata component (it needs the shape but we're at step 1)
   const dummySession = {
@@ -138,6 +142,7 @@ export function NewSessionFlow({
             >
               <Musharata
                 session={dummySession}
+                mode={sessionMode}
                 onComplete={handleMusharataComplete}
               />
             </motion.div>

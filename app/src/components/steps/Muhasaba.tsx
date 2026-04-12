@@ -135,9 +135,16 @@ export function Muhasaba({
                     )}
                   </AnimatePresence>
                 </motion.div>
-                <span className={`text-sm transition-colors ${taskCompletion[i] ? 'text-text-primary' : 'text-text-secondary'}`}>
-                  {task.text}
-                </span>
+                <div className="flex-1 min-w-0">
+                  <span className={`text-sm transition-colors ${taskCompletion[i] ? 'text-text-primary' : 'text-text-secondary'}`}>
+                    {task.text}
+                  </span>
+                  {task.bucket && (
+                    <span className="block text-[10px] text-gold-dim mt-0.5 uppercase tracking-wider">
+                      {task.bucket}
+                    </span>
+                  )}
+                </div>
               </div>
             </motion.button>
           ))}

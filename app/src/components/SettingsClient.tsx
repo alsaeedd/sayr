@@ -53,10 +53,18 @@ export function SettingsClient({ profile }: { profile: Profile }) {
   // Presets
   const [avoidances, setAvoidances] = useState<string[]>(profile.presets?.avoidances || [])
   const [boundaries, setBoundaries] = useState<string[]>(profile.presets?.boundaries || [])
+  const [buckets, setBuckets] = useState<string[]>(profile.presets?.buckets || [])
   const [customAvoidance, setCustomAvoidance] = useState('')
   const [customBoundary, setCustomBoundary] = useState('')
+  const [customBucket, setCustomBucket] = useState('')
   const avoidInputRef = useRef<HTMLInputElement>(null)
   const boundaryInputRef = useRef<HTMLInputElement>(null)
+  const bucketInputRef = useRef<HTMLInputElement>(null)
+
+  const removeBucket = (item: string) => {
+    setBuckets(prev => prev.filter(b => b !== item))
+    markDirty()
+  }
 
   // Prayer method
   const [prayerMethod, setPrayerMethod] = useState<number>(profile.prayer_method ?? 8)
@@ -108,7 +116,7 @@ export function SettingsClient({ profile }: { profile: Profile }) {
     setSaveState('saving')
     await supabase
       .from('profiles')
-      .update({ prayer_method: prayerMethod, presets: { avoidances, boundaries } })
+      .update({ prayer_method: prayerMethod, presets: { avoidances, boundaries, buckets } })
       .eq('id', profile.id)
 
     setSaveState('saved')
@@ -374,6 +382,62 @@ export function SettingsClient({ profile }: { profile: Profile }) {
               <motion.button
                 onClick={() => addCustom(customBoundary, setCustomBoundary, boundaries, setBoundaries, boundaryInputRef)}
                 className="w-10 h-10 flex items-center justify-center rounded-lg border border-border-subtle text-text-muted hover:text-emerald-light hover:border-emerald-light/25 transition-all"
+                whileTap={{ scale: 0.9 }}
+              >
+                <Plus size={16} />
+              </motion.button>
+            </div>
+          </motion.section>
+
+          <div className="h-px bg-border-subtle" />
+
+          {/* ── Buckets ── */}
+          <motion.section variants={fadeUp} className="space-y-4">
+            <div>
+              <h2 className="text-base font-medium text-text-primary">Buckets</h2>
+              <p className="text-text-muted text-xs mt-1">
+                Life domains or projects you can assign tasks to — e.g. &ldquo;Work&rdquo;, &ldquo;Family&rdquo;, &ldquo;Deen&rdquo;, &ldquo;Thesis&rdquo;.
+                Especially useful for full-day sessions.
+              </p>
+            </div>
+
+            <AnimatePresence>
+              {buckets.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {buckets.map(item => (
+                    <motion.span
+                      key={item}
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.9 }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-gold/25 bg-gold/[0.05] text-gold"
+                    >
+                      {item}
+                      <button
+                        onClick={() => removeBucket(item)}
+                        className="opacity-60 hover:opacity-100 transition-opacity"
+                      >
+                        <X size={12} />
+                      </button>
+                    </motion.span>
+                  ))}
+                </div>
+              )}
+            </AnimatePresence>
+
+            <div className="flex gap-2">
+              <input
+                ref={bucketInputRef}
+                type="text"
+                value={customBucket}
+                onChange={e => setCustomBucket(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addCustom(customBucket, setCustomBucket, buckets, setBuckets, bucketInputRef)}
+                placeholder="Add a bucket..."
+                className="input-dark flex-1"
+              />
+              <motion.button
+                onClick={() => addCustom(customBucket, setCustomBucket, buckets, setBuckets, bucketInputRef)}
+                className="w-10 h-10 flex items-center justify-center rounded-lg border border-border-subtle text-text-muted hover:text-gold hover:border-gold/25 transition-all"
                 whileTap={{ scale: 0.9 }}
               >
                 <Plus size={16} />

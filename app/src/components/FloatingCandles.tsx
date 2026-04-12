@@ -270,7 +270,7 @@ function Scene() {
 
 export function FloatingCandles({ className = '' }: { className?: string }) {
   return (
-    <div className={`absolute inset-0 pointer-events-none ${className}`}>
+    <div className={`fixed inset-0 pointer-events-none ${className}`}>
       <Canvas
         camera={{ position: [0, 2.5, 6], fov: 55, near: 0.5, far: 20 }}
         dpr={[1, 1.5]}

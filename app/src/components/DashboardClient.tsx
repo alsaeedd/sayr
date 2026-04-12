@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Plus, LogOut, Clock, CheckCircle2, Trash2, X, SlidersHorizontal } from 'lucide-react'
+import { Plus, LogOut, Clock, CheckCircle2, Trash2, X, SlidersHorizontal, Sun, Timer } from 'lucide-react'
 import { LoadingScreen } from '@/components/LoadingScreen'
 import type { Session } from '@/lib/types'
 
@@ -82,6 +82,7 @@ export function DashboardClient({
     }
   }, [searchParams, router])
   const [sessionName, setSessionName] = useState('')
+  const [sessionMode, setSessionMode] = useState<'time_block' | 'full_day'>('time_block')
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [navigating, setNavigating] = useState(false)
 
@@ -110,13 +111,17 @@ export function DashboardClient({
 
     setNavigating(true)
     const name = sessionName.trim()
-    const params = name ? `?name=${encodeURIComponent(name)}` : ''
-    router.push(`/session/new${params}`)
+    const qs = new URLSearchParams()
+    if (name) qs.set('name', name)
+    if (sessionMode !== 'time_block') qs.set('mode', sessionMode)
+    const params = qs.toString()
+    router.push(`/session/new${params ? `?${params}` : ''}`)
   }
 
   const handleNewClick = () => {
     setShowNameInput(true)
     setSessionName('')
+    setSessionMode('time_block')
   }
 
   const handleNameSubmit = (e: React.FormEvent) => {
@@ -244,6 +249,36 @@ export function DashboardClient({
                     className="input-dark text-center"
                     autoFocus
                   />
+                  {/* Mode toggle */}
+                  <div className="flex gap-2 w-full">
+                    {([
+                      { id: 'time_block', label: 'Time block', sub: 'Single focus window', icon: Timer },
+                      { id: 'full_day', label: 'Full day', sub: 'Plan around prayer times', icon: Sun },
+                    ] as const).map(({ id, label, sub, icon: Icon }) => {
+                      const active = sessionMode === id
+                      return (
+                        <motion.button
+                          key={id}
+                          type="button"
+                          onClick={() => setSessionMode(id)}
+                          className={`flex-1 px-3 py-2.5 rounded-xl border text-left transition-all ${
+                            active
+                              ? 'border-gold/30 bg-gold/[0.05]'
+                              : 'border-border-subtle hover:border-border-accent'
+                          }`}
+                          whileTap={{ scale: 0.98 }}
+                        >
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <Icon size={13} className={active ? 'text-gold' : 'text-text-muted'} />
+                            <span className={`text-xs font-medium ${active ? 'text-text-primary' : 'text-text-secondary'}`}>
+                              {label}
+                            </span>
+                          </div>
+                          <p className="text-text-muted text-[10px] leading-tight">{sub}</p>
+                        </motion.button>
+                      )
+                    })}
+                  </div>
                   <div className="flex gap-2">
                     <motion.button
                       type="submit"

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, X, Clock } from 'lucide-react'
+import { Plus, X, Clock, Layers } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import type { Session, PrayerTimes } from '@/lib/types'
 
@@ -44,17 +44,32 @@ function getNowTime() {
   return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
 }
 
+type BlockDraft = {
+  label: string
+  start: string
+  end: string
+  tasks: string[]
+  // Parallel to `tasks`: bucket per task ('' = unassigned).
+  taskBuckets: string[]
+}
+
 export function Musharata({
   session,
+  mode = 'time_block',
   onComplete,
 }: {
   session: Session
+  mode?: 'time_block' | 'full_day'
   onComplete: (data: Record<string, unknown>) => void
 }) {
   const supabase = useMemo(() => createClient(), [])
   const [tasks, setTasks] = useState<string[]>([''])
+  // Parallel to `tasks`: the bucket assigned to each task (empty string = none).
+  const [taskBuckets, setTaskBuckets] = useState<string[]>([''])
   const [avoidances, setAvoidances] = useState<string[]>([''])
   const [boundaries, setBoundaries] = useState<string[]>([''])
+  const [buckets, setBuckets] = useState<string[]>([])
+  const [useBuckets, setUseBuckets] = useState(false)
   const [presetsLoaded, setPresetsLoaded] = useState(false)
   const [timeBlockStart, setTimeBlockStart] = useState('')
   const [timeBlockEnd, setTimeBlockEnd] = useState('')
@@ -64,10 +79,19 @@ export function Musharata({
   const [selectedPrayer, setSelectedPrayer] = useState<string | null>(null)
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null)
 
+  // Full-day mode: schedule of blocks, each with its own task list.
+  // One block at start; user can add/remove and auto-fill from prayer times.
+  const [blocks, setBlocks] = useState<BlockDraft[]>([
+    { label: '', start: '', end: '', tasks: [''], taskBuckets: [''] },
+  ])
+
   // Refs for focusing next input on Enter
   const taskRefs = useRef<(HTMLInputElement | null)[]>([])
   const avoidRefs = useRef<(HTMLInputElement | null)[]>([])
   const boundaryRefs = useRef<(HTMLInputElement | null)[]>([])
+  const startTimeRef = useRef<HTMLInputElement | null>(null)
+  // Full-day mode: 2D ref grid [blockIndex][taskIndex].
+  const blockTaskRefs = useRef<HTMLInputElement[][]>([])
 
   // Load user presets on mount
   useEffect(() => {
@@ -79,9 +103,10 @@ export function Musharata({
         .single()
 
       if (data?.presets && !presetsLoaded) {
-        const p = data.presets as { avoidances?: string[]; boundaries?: string[] }
+        const p = data.presets as { avoidances?: string[]; boundaries?: string[]; buckets?: string[] }
         if (p.avoidances?.length) setAvoidances([...p.avoidances, ''])
         if (p.boundaries?.length) setBoundaries([...p.boundaries, ''])
+        if (p.buckets?.length) setBuckets(p.buckets)
         setPresetsLoaded(true)
       }
     }
@@ -143,29 +168,204 @@ export function Musharata({
     setter(prev => prev.filter((_, i) => i !== index))
   }
 
-  // Enter key: add new item and focus it
+  // Enter advances focus: next row if one exists, else append+focus if current
+  // has text, else jump to the next section's first input (so an empty last
+  // row lets you escape the list without reaching for the mouse).
   const handleListKeyDown = useCallback((
     e: React.KeyboardEvent<HTMLInputElement>,
     items: string[],
     setter: React.Dispatch<React.SetStateAction<string[]>>,
     refs: React.MutableRefObject<(HTMLInputElement | null)[]>,
     index: number,
+    onExit?: () => void,
   ) => {
-    if (e.key === 'Enter') {
-      e.preventDefault()
-      if (items[index].trim()) {
-        setter(prev => [...prev, ''])
-        // Focus new input after render
-        setTimeout(() => refs.current[index + 1]?.focus(), 50)
-      }
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+
+    const hasNext = index < items.length - 1
+    if (hasNext) {
+      refs.current[index + 1]?.focus()
+      return
     }
+
+    if (items[index].trim()) {
+      setter(prev => [...prev, ''])
+      setTimeout(() => refs.current[index + 1]?.focus(), 50)
+      return
+    }
+
+    // Empty last row → advance to next section.
+    onExit?.()
   }, [])
 
-  const canProceed = tasks.some(t => t.trim()) && timeBlockStart && timeBlockEnd && !timeError
+  // Exit callbacks for list Enter-key navigation. Wrapped in useCallback so
+  // the lint rule that flags ref access can see they're memoized event handlers,
+  // not ref reads during render.
+  const focusBoundaryFirst = useCallback(() => {
+    boundaryRefs.current[0]?.focus()
+  }, [])
+  const focusStartTime = useCallback(() => {
+    startTimeRef.current?.focus()
+  }, [])
+
+  // Task-specific mutators — keep `taskBuckets` aligned with `tasks` by index.
+  const addTaskRow = () => {
+    setTasks(prev => [...prev, ''])
+    setTaskBuckets(prev => [...prev, ''])
+  }
+  const removeTaskRow = (index: number) => {
+    setTasks(prev => prev.filter((_, i) => i !== index))
+    setTaskBuckets(prev => prev.filter((_, i) => i !== index))
+  }
+  const handleTaskKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, index: number) => {
+    if (e.key !== 'Enter') return
+    e.preventDefault()
+
+    const hasNext = index < tasks.length - 1
+    if (hasNext) {
+      taskRefs.current[index + 1]?.focus()
+      return
+    }
+
+    if (tasks[index].trim()) {
+      addTaskRow()
+      setTimeout(() => taskRefs.current[index + 1]?.focus(), 50)
+      return
+    }
+
+    // Empty last row → jump to Avoidances section.
+    avoidRefs.current[0]?.focus()
+  }
+
+  // Full-day block helpers
+  const updateBlock = (i: number, patch: Partial<BlockDraft>) => {
+    setBlocks(prev => prev.map((b, idx) => (idx === i ? { ...b, ...patch } : b)))
+  }
+  const addBlock = () => {
+    // Anchor new block's start to previous block's end if available.
+    setBlocks(prev => {
+      const last = prev[prev.length - 1]
+      return [...prev, { label: '', start: last?.end || '', end: '', tasks: [''], taskBuckets: [''] }]
+    })
+  }
+  const removeBlock = (i: number) => {
+    setBlocks(prev => prev.filter((_, idx) => idx !== i))
+  }
+  const updateBlockTask = (bi: number, ti: number, value: string) => {
+    setBlocks(prev => prev.map((b, idx) =>
+      idx !== bi ? b : { ...b, tasks: b.tasks.map((t, tIdx) => (tIdx === ti ? value : t)) }
+    ))
+  }
+  const updateBlockTaskBucket = (bi: number, ti: number, value: string) => {
+    setBlocks(prev => prev.map((b, idx) =>
+      idx !== bi ? b : { ...b, taskBuckets: b.taskBuckets.map((v, tIdx) => (tIdx === ti ? value : v)) }
+    ))
+  }
+  const addBlockTask = (bi: number) => {
+    setBlocks(prev => prev.map((b, idx) =>
+      idx !== bi ? b : { ...b, tasks: [...b.tasks, ''], taskBuckets: [...b.taskBuckets, ''] }
+    ))
+  }
+  const removeBlockTask = (bi: number, ti: number) => {
+    setBlocks(prev => prev.map((b, idx) =>
+      idx !== bi ? b : {
+        ...b,
+        tasks: b.tasks.filter((_, tIdx) => tIdx !== ti),
+        taskBuckets: b.taskBuckets.filter((_, tIdx) => tIdx !== ti),
+      }
+    ))
+  }
+
+  // Fill blocks from today's prayer times: Fajr→Dhuhr, Dhuhr→Asr, Asr→Maghrib, Maghrib→Isha.
+  const fillFromPrayerTimes = () => {
+    if (!prayerTimes) return
+    const { Fajr, Dhuhr, Asr, Maghrib, Isha } = prayerTimes
+    const seed: BlockDraft[] = [
+      { label: 'Fajr → Dhuhr', start: Fajr, end: Dhuhr, tasks: [''], taskBuckets: [''] },
+      { label: 'Dhuhr → Asr', start: Dhuhr, end: Asr, tasks: [''], taskBuckets: [''] },
+      { label: 'Asr → Maghrib', start: Asr, end: Maghrib, tasks: [''], taskBuckets: [''] },
+      { label: 'Maghrib → Isha', start: Maghrib, end: Isha, tasks: [''], taskBuckets: [''] },
+    ]
+    // Preserve already-typed tasks by merging where labels match.
+    setBlocks(prev => seed.map(s => {
+      const existing = prev.find(b => b.label === s.label)
+      return existing
+        ? { ...s, tasks: existing.tasks, taskBuckets: existing.taskBuckets }
+        : s
+    }))
+  }
+
+  // Validation — full-day blocks must each have a start, end, label, and end > start.
+  const blocksValid = blocks.length > 0 && blocks.every(b => {
+    if (!b.label.trim() || !b.start || !b.end) return false
+    const [sh, sm] = b.start.split(':').map(Number)
+    const [eh, em] = b.end.split(':').map(Number)
+    return eh * 60 + em > sh * 60 + sm
+  }) && blocks.some(b => b.tasks.some(t => t.trim()))
+
+  const canProceed = mode === 'full_day'
+    ? blocksValid
+    : tasks.some(t => t.trim()) && timeBlockStart && timeBlockEnd && !timeError
 
   const handleSubmit = () => {
+    if (mode === 'full_day') {
+      // Flatten: each task's caption becomes "Block · Bucket" when the user
+      // picked a bucket, otherwise just "Block". Muhasaba renders this as a
+      // single caption without special-casing.
+      const captionFor = (blockLabel: string, userBucket: string) => {
+        const bucket = useBuckets && userBucket && buckets.includes(userBucket) ? userBucket : ''
+        return bucket ? `${blockLabel} · ${bucket}` : blockLabel
+      }
+      const flatTasks = blocks.flatMap(b =>
+        b.tasks
+          .map((text, i) => ({ text, userBucket: b.taskBuckets[i] || '' }))
+          .filter(t => t.text.trim())
+          .map(t => ({ text: t.text, completed: false, bucket: captionFor(b.label, t.userBucket) }))
+      )
+      const envelopeStart = blocks[0]?.start || ''
+      const envelopeEnd = blocks[blocks.length - 1]?.end || ''
+
+      onComplete({
+        tasks: flatTasks,
+        blocks: blocks.map(b => ({
+          label: b.label,
+          start: b.start,
+          end: b.end,
+          tasks: b.tasks
+            .map((text, i) => ({ text, userBucket: b.taskBuckets[i] || '' }))
+            .filter(t => t.text.trim())
+            .map(t => {
+              const userBucket = useBuckets && t.userBucket && buckets.includes(t.userBucket)
+                ? t.userBucket
+                : undefined
+              return userBucket
+                ? { text: t.text, completed: false, bucket: userBucket }
+                : { text: t.text, completed: false }
+            }),
+        })),
+        avoidances: avoidances.filter(a => a.trim()),
+        boundaries: boundaries.filter(b => b.trim()),
+        time_block_start: envelopeStart,
+        time_block_end: envelopeEnd,
+        dua_recited: duaRecited,
+        _lat: userLocation?.lat,
+        _lng: userLocation?.lng,
+      })
+      return
+    }
+
+    const finalTasks = tasks
+      .map((text, i) => ({ text, bucket: taskBuckets[i] }))
+      .filter(t => t.text.trim())
+      .map(t => {
+        const bucket = useBuckets && t.bucket && buckets.includes(t.bucket) ? t.bucket : undefined
+        return bucket
+          ? { text: t.text, completed: false, bucket }
+          : { text: t.text, completed: false }
+      })
+
     onComplete({
-      tasks: tasks.filter(t => t.trim()).map(t => ({ text: t, completed: false })),
+      tasks: finalTasks,
       avoidances: avoidances.filter(a => a.trim()),
       boundaries: boundaries.filter(b => b.trim()),
       time_block_start: timeBlockStart,
@@ -191,6 +391,7 @@ export function Musharata({
     sublabel: string,
     placeholder: string,
     addLabel: string,
+    onExit?: () => void,
   ) => (
     <motion.div variants={fadeUp} className="space-y-3">
       <label className="text-text-primary text-sm font-medium">
@@ -204,7 +405,7 @@ export function Musharata({
               type="text"
               value={val}
               onChange={(e) => updateItem(setter, i, e.target.value)}
-              onKeyDown={(e) => handleListKeyDown(e, items, setter, refs, i)}
+              onKeyDown={(e) => handleListKeyDown(e, items, setter, refs, i, onExit)}
               placeholder={placeholder}
               className="input-dark flex-1"
             />
@@ -247,38 +448,80 @@ export function Musharata({
         </p>
       </motion.div>
 
-      {/* Tasks */}
+      {/* Time-block mode: Tasks + single Time Block */}
+      {mode === 'time_block' && (<>
       <motion.div variants={fadeUp} className="space-y-3">
-        <label className="text-text-primary text-sm font-medium flex items-center gap-2">
-          What must you accomplish this session?
-        </label>
+        <div className="flex items-center justify-between gap-3">
+          <label className="text-text-primary text-sm font-medium flex items-center gap-2">
+            What must you accomplish this session?
+          </label>
+          {buckets.length > 0 && (
+            <motion.button
+              onClick={() => setUseBuckets(prev => !prev)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border transition-all ${
+                useBuckets
+                  ? 'border-gold/30 bg-gold/[0.05] text-gold'
+                  : 'border-border-subtle text-text-muted hover:text-text-secondary hover:border-border-accent'
+              }`}
+              whileTap={{ scale: 0.95 }}
+              title="Group tasks by bucket"
+            >
+              <Layers size={12} />
+              Buckets
+            </motion.button>
+          )}
+        </div>
         <AnimatePresence mode="popLayout">
           {tasks.map((task, i) => (
-            <motion.div key={`task-${i}`} {...itemEnter} className="flex gap-2">
-              <input
-                ref={(el) => { taskRefs.current[i] = el }}
-                type="text"
-                value={task}
-                onChange={(e) => updateItem(setTasks, i, e.target.value)}
-                onKeyDown={(e) => handleListKeyDown(e, tasks, setTasks, taskRefs, i)}
-                placeholder={i === 0 ? 'Most important task...' : 'Another task...'}
-                className="input-dark flex-1"
-              />
-              {tasks.length > 1 && (
-                <motion.button
-                  onClick={() => removeItem(setTasks, i)}
-                  className="text-text-muted hover:text-text-secondary p-2"
-                  whileHover={{ scale: 1.15 }}
-                  whileTap={{ scale: 0.85 }}
-                >
-                  <X size={16} />
-                </motion.button>
+            <motion.div key={`task-${i}`} {...itemEnter} className="space-y-1.5">
+              <div className="flex gap-2">
+                <input
+                  ref={(el) => { taskRefs.current[i] = el }}
+                  type="text"
+                  value={task}
+                  onChange={(e) => updateItem(setTasks, i, e.target.value)}
+                  onKeyDown={(e) => handleTaskKeyDown(e, i)}
+                  placeholder={i === 0 ? 'Most important task...' : 'Another task...'}
+                  className="input-dark flex-1 min-w-0"
+                />
+                {tasks.length > 1 && (
+                  <motion.button
+                    onClick={() => removeTaskRow(i)}
+                    className="text-text-muted hover:text-text-secondary p-2"
+                    whileHover={{ scale: 1.15 }}
+                    whileTap={{ scale: 0.85 }}
+                  >
+                    <X size={16} />
+                  </motion.button>
+                )}
+              </div>
+              {useBuckets && buckets.length > 0 && (
+                <div className="flex items-center gap-1.5 pl-1">
+                  <Layers size={11} className="text-text-muted shrink-0" />
+                  <select
+                    value={taskBuckets[i] || ''}
+                    onChange={(e) =>
+                      setTaskBuckets(prev => prev.map((b, idx) => (idx === i ? e.target.value : b)))
+                    }
+                    className={`text-xs py-0.5 px-2 rounded-md border cursor-pointer transition-all bg-transparent max-w-full ${
+                      taskBuckets[i]
+                        ? 'border-gold/25 text-gold bg-gold/[0.04]'
+                        : 'border-border-subtle text-text-muted hover:text-text-secondary hover:border-border-accent'
+                    }`}
+                    aria-label="Bucket"
+                  >
+                    <option value="">No bucket</option>
+                    {buckets.map(b => (
+                      <option key={b} value={b}>{b}</option>
+                    ))}
+                  </select>
+                </div>
               )}
             </motion.div>
           ))}
         </AnimatePresence>
         <motion.button
-          onClick={() => addItem(setTasks)}
+          onClick={addTaskRow}
           className="text-gold-dim hover:text-gold text-sm flex items-center gap-1"
           whileHover={{ x: 4 }}
           transition={{ type: 'spring', stiffness: 400, damping: 25 }}
@@ -331,6 +574,7 @@ export function Musharata({
             <label className="text-text-muted text-xs mb-1 block">Start</label>
             <div className="flex gap-2">
               <input
+                ref={startTimeRef}
                 type="time"
                 value={timeBlockStart}
                 onChange={(e) => setTimeBlockStart(e.target.value)}
@@ -366,6 +610,193 @@ export function Musharata({
           </p>
         )}
       </motion.div>
+      </>)}
+
+      {/* Full-day mode: schedule of blocks */}
+      {mode === 'full_day' && (
+        <motion.div variants={fadeUp} className="space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <label className="text-text-primary text-sm font-medium flex items-center gap-2">
+              <Clock size={16} className="text-gold" />
+              Day Schedule
+            </label>
+            <div className="flex items-center gap-2">
+              {buckets.length > 0 && (
+                <motion.button
+                  onClick={() => setUseBuckets(prev => !prev)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border transition-all ${
+                    useBuckets
+                      ? 'border-gold/30 bg-gold/[0.05] text-gold'
+                      : 'border-border-subtle text-text-muted hover:text-text-secondary hover:border-border-accent'
+                  }`}
+                  whileTap={{ scale: 0.95 }}
+                  title="Assign buckets to individual tasks"
+                >
+                  <Layers size={12} />
+                  Buckets
+                </motion.button>
+              )}
+              {prayerTimes && (
+                <motion.button
+                  onClick={fillFromPrayerTimes}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs border border-border-subtle text-text-secondary hover:text-gold hover:border-gold/30 transition-all"
+                  whileTap={{ scale: 0.95 }}
+                >
+                  Use prayer times
+                </motion.button>
+              )}
+            </div>
+          </div>
+
+          <p className="text-text-muted text-xs leading-relaxed">
+            Build your day as blocks around fixed anchors. Each block is its own mini-contract —
+            tasks assigned here become grouped by block throughout the session.
+          </p>
+
+          <AnimatePresence mode="popLayout">
+            {blocks.map((block, bi) => (
+              <motion.div
+                key={`block-${bi}`}
+                {...itemEnter}
+                className="glass-card p-4 space-y-3"
+              >
+                <div className="flex gap-2 items-center">
+                  <input
+                    type="text"
+                    value={block.label}
+                    onChange={(e) => updateBlock(bi, { label: e.target.value })}
+                    placeholder={bi === 0 ? 'Block label (e.g. Fajr → Dhuhr)' : 'Block label...'}
+                    className="input-dark flex-1 font-medium"
+                  />
+                  {blocks.length > 1 && (
+                    <motion.button
+                      onClick={() => removeBlock(bi)}
+                      className="text-text-muted hover:text-text-secondary p-2"
+                      whileHover={{ scale: 1.15 }}
+                      whileTap={{ scale: 0.85 }}
+                      title="Remove block"
+                    >
+                      <X size={16} />
+                    </motion.button>
+                  )}
+                </div>
+
+                <div className="flex gap-2 items-center">
+                  <input
+                    type="time"
+                    value={block.start}
+                    onChange={(e) => updateBlock(bi, { start: e.target.value })}
+                    className="input-dark flex-1"
+                    aria-label="Block start"
+                  />
+                  <span className="text-text-muted text-xs">to</span>
+                  <input
+                    type="time"
+                    value={block.end}
+                    onChange={(e) => updateBlock(bi, { end: e.target.value })}
+                    className="input-dark flex-1"
+                    aria-label="Block end"
+                  />
+                </div>
+
+                <div className="space-y-2 pt-1">
+                  <p className="text-text-muted text-[11px] uppercase tracking-wider">Tasks</p>
+                  <AnimatePresence mode="popLayout">
+                    {block.tasks.map((task, ti) => (
+                      <motion.div
+                        key={`block-${bi}-task-${ti}`}
+                        {...itemEnter}
+                        className="space-y-1.5"
+                      >
+                        <div className="flex gap-2">
+                          <input
+                            ref={(el) => {
+                              if (!blockTaskRefs.current[bi]) blockTaskRefs.current[bi] = []
+                              if (el) blockTaskRefs.current[bi][ti] = el
+                            }}
+                            type="text"
+                            value={task}
+                            onChange={(e) => updateBlockTask(bi, ti, e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key !== 'Enter') return
+                              e.preventDefault()
+                              const row = blockTaskRefs.current[bi] || []
+                              const hasNext = ti < block.tasks.length - 1
+                              if (hasNext) {
+                                row[ti + 1]?.focus()
+                                return
+                              }
+                              if (task.trim()) {
+                                addBlockTask(bi)
+                                setTimeout(() => {
+                                  blockTaskRefs.current[bi]?.[ti + 1]?.focus()
+                                }, 50)
+                                return
+                              }
+                              // Empty last row → jump to first task of next block, or
+                              // stay put if this is the last block.
+                              const nextBlockFirst = blockTaskRefs.current[bi + 1]?.[0]
+                              nextBlockFirst?.focus()
+                            }}
+                            placeholder={ti === 0 ? 'What must happen in this block?' : 'Another task...'}
+                            className="input-dark flex-1 min-w-0"
+                          />
+                          {block.tasks.length > 1 && (
+                            <motion.button
+                              onClick={() => removeBlockTask(bi, ti)}
+                              className="text-text-muted hover:text-text-secondary p-2"
+                              whileHover={{ scale: 1.15 }}
+                              whileTap={{ scale: 0.85 }}
+                            >
+                              <X size={14} />
+                            </motion.button>
+                          )}
+                        </div>
+                        {useBuckets && buckets.length > 0 && (
+                          <div className="flex items-center gap-1.5 pl-1">
+                            <Layers size={11} className="text-text-muted shrink-0" />
+                            <select
+                              value={block.taskBuckets[ti] || ''}
+                              onChange={(e) => updateBlockTaskBucket(bi, ti, e.target.value)}
+                              className={`text-xs py-0.5 px-2 rounded-md border cursor-pointer transition-all bg-transparent max-w-full ${
+                                block.taskBuckets[ti]
+                                  ? 'border-gold/25 text-gold bg-gold/[0.04]'
+                                  : 'border-border-subtle text-text-muted hover:text-text-secondary hover:border-border-accent'
+                              }`}
+                              aria-label="Bucket"
+                            >
+                              <option value="">No bucket</option>
+                              {buckets.map(b => (
+                                <option key={b} value={b}>{b}</option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+                  <motion.button
+                    onClick={() => addBlockTask(bi)}
+                    className="text-gold-dim hover:text-gold text-xs flex items-center gap-1"
+                    whileHover={{ x: 3 }}
+                  >
+                    <Plus size={12} /> Add task
+                  </motion.button>
+                </div>
+              </motion.div>
+            ))}
+          </AnimatePresence>
+
+          <motion.button
+            onClick={addBlock}
+            className="text-gold-dim hover:text-gold text-sm flex items-center gap-1"
+            whileHover={{ x: 4 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+          >
+            <Plus size={14} /> Add block
+          </motion.button>
+        </motion.div>
+      )}
 
       {/* Avoidances */}
       {renderListSection(
@@ -373,6 +804,8 @@ export function Musharata({
         'Avoidances', '— what will you not do?',
         'e.g. No Instagram, no Slack...',
         'Add avoidance',
+        // eslint-disable-next-line react-hooks/refs -- onExit callback is invoked on keydown, not during render
+        focusBoundaryFirst,
       )}
 
       {/* Boundaries */}
@@ -381,6 +814,8 @@ export function Musharata({
         'Boundaries', '— limits on how you engage',
         "e.g. Won't skip Dhuhr, will eat a real meal...",
         'Add boundary',
+        // eslint-disable-next-line react-hooks/refs -- onExit callback is invoked on keydown, not during render
+        mode === 'time_block' ? focusStartTime : undefined,
       )}
 
       {/* Bismillah */}

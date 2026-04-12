@@ -33,32 +33,65 @@ export function Muraqaba({
   const [isRunning, setIsRunning] = useState(false)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const startTimeRef = useRef<string>('')
+  // Wall-clock target: absolute ms timestamp the timer should end at.
+  // Source of truth — survives background-tab throttling of setInterval.
+  const endTimeRef = useRef<number | null>(null)
 
   useEffect(() => {
-    if (isRunning && remaining > 0) {
-      intervalRef.current = setInterval(() => {
-        setRemaining(prev => {
-          if (prev <= 1) {
-            setIsRunning(false)
-            setPhase('complete')
-            return 0
-          }
-          return prev - 1
-        })
-      }, 1000)
+    if (!isRunning) return
+
+    const tick = () => {
+      if (endTimeRef.current == null) return
+      const msLeft = endTimeRef.current - Date.now()
+      const secsLeft = Math.max(0, Math.ceil(msLeft / 1000))
+      setRemaining(secsLeft)
+      if (secsLeft <= 0) {
+        setIsRunning(false)
+        setPhase('complete')
+      }
     }
+
+    // Tick every 250ms — cheap, and smooths the display if a background
+    // throttle caused us to "jump" on return.
+    tick()
+    intervalRef.current = setInterval(tick, 250)
+
+    // When the tab becomes visible again, browsers may have been
+    // suspending the interval — recompute immediately from wall clock.
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') tick()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current)
+      document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [isRunning, remaining])
+  }, [isRunning])
 
   const startSession = () => {
     startTimeRef.current = new Date().toISOString()
+    endTimeRef.current = Date.now() + remaining * 1000
     setIsRunning(true)
     setPhase('active')
   }
 
-  const togglePause = () => setIsRunning(prev => !prev)
+  const togglePause = () => {
+    setIsRunning(prev => {
+      if (prev) {
+        // Pausing: freeze remaining from the wall clock, drop the target.
+        if (endTimeRef.current != null) {
+          const msLeft = endTimeRef.current - Date.now()
+          setRemaining(Math.max(0, Math.ceil(msLeft / 1000)))
+        }
+        endTimeRef.current = null
+      } else {
+        // Resuming: re-anchor the end time to now + remaining.
+        endTimeRef.current = Date.now() + remaining * 1000
+      }
+      return !prev
+    })
+  }
 
   const handleDrift = () => {
     setDriftCount(prev => prev + 1)

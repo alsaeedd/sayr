@@ -12,6 +12,7 @@ export interface Profile {
 export interface UserPresets {
   avoidances: string[]
   boundaries: string[]
+  buckets?: string[]
 }
 
 export interface Session {
@@ -31,10 +32,24 @@ export interface Session {
   session_duration_minutes: number | null
 }
 
+export interface MusharataBlock {
+  label: string
+  start: string
+  end: string
+  tasks: { text: string; completed: boolean; bucket?: string }[]
+}
+
 export interface MusharataData {
-  tasks: { text: string; completed: boolean }[]
+  // Absent on legacy sessions — treat undefined as 'time_block'.
+  mode?: 'time_block' | 'full_day'
+  tasks: { text: string; completed: boolean; bucket?: string }[]
+  // Only populated in full_day mode. Top-level `tasks` is also populated
+  // (flattened from blocks, with bucket = block.label) so downstream
+  // steps (Muraqaba timer, Muhasaba checklist) keep working unchanged.
+  blocks?: MusharataBlock[]
   avoidances: string[]
   boundaries: string[]
+  // In full_day mode, these are the day envelope (first block start → last block end).
   time_block_start: string
   time_block_end: string
   dua_recited: boolean
