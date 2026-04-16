@@ -74,6 +74,7 @@ export function Musharata({
   onCancel,
   carryForward,
   unfinishedHint,
+  taskPool,
 }: {
   session: Session
   mode?: 'time_block' | 'full_day'
@@ -83,6 +84,7 @@ export function Musharata({
   onCancel?: () => void
   carryForward?: MusharataCarryForward | null
   unfinishedHint?: MusharataUnfinishedHint | null
+  taskPool?: Array<{ text: string; bucket?: string }>
 }) {
   // Mode: explicit prop wins, else inferred from initialData, else time_block.
   const mode: 'time_block' | 'full_day' =
@@ -736,6 +738,18 @@ export function Musharata({
         >
           <Plus size={14} /> Add task
         </motion.button>
+        {taskPool && taskPool.length > 0 && (
+          <motion.button
+            onClick={() => {
+              pullTaskList(taskPool)
+            }}
+            className="text-gold-dim hover:text-gold text-sm flex items-center gap-1"
+            whileHover={{ x: 4 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 25 }}
+          >
+            <ArrowDownCircle size={14} /> Pull {taskPool.length} from pool
+          </motion.button>
+        )}
       </motion.div>
 
       {/* Time Block */}

@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 
 import { Musharata } from '@/components/steps/Musharata'
+import type { MusharataData } from '@/lib/types'
 
 const STEP = { ar: 'المشارطة', en: 'Musharata', subtitle: 'Set your conditions' }
 
@@ -21,18 +22,24 @@ type UnfinishedHint = {
   total_count: number
 }
 
+type PoolTask = { text: string; bucket?: string }
+
 export function NewSessionFlow({
   userId,
   sessionName,
   sessionMode,
   carryForward,
   unfinishedHint,
+  taskPool,
+  templateData,
 }: {
   userId: string
   sessionName: string | null
   sessionMode: 'time_block' | 'full_day'
   carryForward?: CarryForward | null
   unfinishedHint?: UnfinishedHint | null
+  taskPool?: PoolTask[]
+  templateData?: MusharataData | null
 }) {
   const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
@@ -159,8 +166,10 @@ export function NewSessionFlow({
               <Musharata
                 session={dummySession}
                 mode={sessionMode}
+                initialData={templateData}
                 carryForward={carryForward ?? null}
                 unfinishedHint={unfinishedHint ?? null}
+                taskPool={taskPool}
                 onComplete={handleMusharataComplete}
               />
             </motion.div>

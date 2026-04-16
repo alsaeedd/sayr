@@ -1,7 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { DashboardClient } from '@/components/DashboardClient'
-import type { Session } from '@/lib/types'
+import type { Session, UserPresets } from '@/lib/types'
 
 export default async function DashboardPage() {
   const supabase = await createClient()
@@ -23,12 +23,15 @@ export default async function DashboardPage() {
     .limit(20)
 
   const displayName = profile?.display_name || user.user_metadata?.full_name || 'Traveler'
+  const presets = (profile?.presets as UserPresets | null) ?? null
 
   return (
     <DashboardClient
       userId={user.id}
       displayName={displayName}
       sessions={(sessions as Session[]) || []}
+      initialTaskPool={presets?.task_pool ?? []}
+      buckets={presets?.buckets ?? []}
     />
   )
 }

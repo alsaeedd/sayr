@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Plus, LogOut, Clock, CheckCircle2, Trash2, X, SlidersHorizontal, Sun, Timer, Flame, TrendingUp } from 'lucide-react'
+import { Plus, LogOut, Clock, CheckCircle2, Trash2, X, SlidersHorizontal, Sun, Timer, Flame, TrendingUp, Copy } from 'lucide-react'
 import { LoadingScreen } from '@/components/LoadingScreen'
 import type { Session } from '@/lib/types'
 
@@ -56,14 +56,20 @@ function getGreeting(): { salaam: string; arabic: string; note: string } {
   }
 }
 
+type PoolTask = { text: string; bucket?: string }
+
 export function DashboardClient({
   userId,
   displayName,
   sessions: initialSessions,
+  initialTaskPool = [],
+  buckets = [],
 }: {
   userId: string
   displayName: string
   sessions: Session[]
+  initialTaskPool?: PoolTask[]
+  buckets?: string[]
 }) {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -85,6 +91,43 @@ export function DashboardClient({
   const [sessionMode, setSessionMode] = useState<'time_block' | 'full_day'>('time_block')
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [navigating, setNavigating] = useState(false)
+
+  // ── Task pool ─────────────────────────────────────────────────────
+  const [taskPool, setTaskPool] = useState<PoolTask[]>(initialTaskPool)
+  const [poolInput, setPoolInput] = useState('')
+  const [poolBucket, setPoolBucket] = useState('')
+  const poolInputRef = useRef<HTMLInputElement>(null)
+
+  // Debounced write — saves pool to profiles.presets.task_pool after changes
+  // settle. Fire-and-forget; localStorage isn't needed since presets persist.
+  const poolTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const savePool = (nextPool: PoolTask[]) => {
+    setTaskPool(nextPool)
+    if (poolTimerRef.current) clearTimeout(poolTimerRef.current)
+    poolTimerRef.current = setTimeout(async () => {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('presets')
+        .eq('id', userId)
+        .single()
+      const presets = (profile?.presets ?? {}) as Record<string, unknown>
+      void supabase
+        .from('profiles')
+        .update({ presets: { ...presets, task_pool: nextPool } })
+        .eq('id', userId)
+    }, 400)
+  }
+
+  const addPoolTask = () => {
+    const text = poolInput.trim()
+    if (!text) return
+    const task: PoolTask = poolBucket ? { text, bucket: poolBucket } : { text }
+    savePool([...taskPool, task])
+    setPoolInput('')
+    setPoolBucket('')
+    poolInputRef.current?.focus()
+  }
+  const removePoolTask = (i: number) => savePool(taskPool.filter((_, idx) => idx !== i))
 
   const startNewSession = async () => {
     // Only auto-complete sessions that have actually finished mu'ataba (have the data)
@@ -356,6 +399,78 @@ export function DashboardClient({
             </AnimatePresence>
           </motion.div>
 
+          {/* Task pool — persistent planning inbox */}
+          <motion.div variants={fadeUp} className="space-y-3">
+            <h3 className="text-text-muted text-xs uppercase tracking-[0.1em] font-medium">
+              Task Pool
+            </h3>
+            <div className="glass-card p-4 space-y-3">
+              <AnimatePresence mode="popLayout">
+                {taskPool.map((task, i) => (
+                  <motion.div
+                    key={`pool-${task.text}-${i}`}
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                    transition={{ type: 'spring', stiffness: 300, damping: 28 }}
+                    className="flex items-start gap-2"
+                  >
+                    <span className="text-gold mt-1 text-xs">·</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-text-secondary text-sm">{task.text}</p>
+                      {task.bucket && (
+                        <p className="text-gold/60 text-[10px] uppercase tracking-wider">{task.bucket}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); removePoolTask(i) }}
+                      className="text-text-muted hover:text-text-secondary p-1 shrink-0 opacity-0 group-hover:opacity-100 hover:!opacity-100 transition-opacity"
+                    >
+                      <X size={13} />
+                    </button>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+              {taskPool.length === 0 && (
+                <p className="text-text-muted text-xs text-center py-2">
+                  Capture tasks throughout the day. Pull them into a session when you&apos;re ready.
+                </p>
+              )}
+              <div className="flex gap-2 pt-1">
+                <input
+                  ref={poolInputRef}
+                  type="text"
+                  value={poolInput}
+                  onChange={(e) => setPoolInput(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && addPoolTask()}
+                  placeholder="Add a task..."
+                  className="input-dark flex-1"
+                />
+                {buckets.length > 0 && (
+                  <select
+                    value={poolBucket}
+                    onChange={(e) => setPoolBucket(e.target.value)}
+                    className={`input-dark px-2 text-xs max-w-[7rem] cursor-pointer ${
+                      poolBucket ? 'text-gold' : 'text-text-muted'
+                    }`}
+                  >
+                    <option value="">Bucket</option>
+                    {buckets.map(b => (
+                      <option key={b} value={b}>{b}</option>
+                    ))}
+                  </select>
+                )}
+                <motion.button
+                  onClick={addPoolTask}
+                  className="w-10 h-10 flex items-center justify-center rounded-lg border border-border-subtle text-text-muted hover:text-gold hover:border-gold/25 transition-all shrink-0"
+                  whileTap={{ scale: 0.9 }}
+                >
+                  <Plus size={16} />
+                </motion.button>
+              </div>
+            </div>
+          </motion.div>
+
           {/* Active sessions */}
           {activeSessions.length > 0 && (
             <motion.div variants={fadeUp} className="space-y-3">
@@ -476,7 +591,20 @@ export function DashboardClient({
                         </div>
                       )}
                       <button
-                        onClick={() => setDeletingId(session.id)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setNavigating(true)
+                          const qs = new URLSearchParams({ template: session.id })
+                          if (session.name) qs.set('name', session.name)
+                          router.push(`/session/new?${qs.toString()}`)
+                        }}
+                        className="text-text-muted hover:text-gold opacity-0 group-hover:opacity-100 transition-all"
+                        title="Use as template"
+                      >
+                        <Copy size={13} />
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setDeletingId(session.id) }}
                         className="text-text-muted hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
                       >
                         <Trash2 size={13} />

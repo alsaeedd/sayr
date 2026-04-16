@@ -1,14 +1,14 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { NewSessionFlow } from '@/components/NewSessionFlow'
-import type { MuatabaData, MuhasabaData, MusharataData } from '@/lib/types'
+import type { MuatabaData, MuhasabaData, MusharataData, UserPresets } from '@/lib/types'
 
 export default async function NewSessionPage({
   searchParams,
 }: {
-  searchParams: Promise<{ name?: string; mode?: string }>
+  searchParams: Promise<{ name?: string; mode?: string; template?: string }>
 }) {
-  const { name, mode } = await searchParams
+  const { name, mode, template } = await searchParams
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
 
@@ -16,6 +16,27 @@ export default async function NewSessionPage({
 
   const sessionMode: 'time_block' | 'full_day' =
     mode === 'full_day' ? 'full_day' : 'time_block'
+
+  // Load presets for the task pool.
+  const { data: profileRow } = await supabase
+    .from('profiles')
+    .select('presets')
+    .eq('id', user.id)
+    .single()
+  const presets = (profileRow?.presets as UserPresets | null) ?? null
+  const taskPool = presets?.task_pool ?? []
+
+  // Template: load a past session's Musharata to clone from.
+  let templateData: MusharataData | null = null
+  if (template) {
+    const { data: tplSession } = await supabase
+      .from('sessions')
+      .select('musharata')
+      .eq('id', template)
+      .eq('user_id', user.id)
+      .single()
+    templateData = (tplSession?.musharata as MusharataData | null) ?? null
+  }
 
   // Pull the most recently completed session so we can offer to carry forward
   // intentional handoffs: muataba.change_for_tomorrow, and any unfinished tasks
@@ -72,9 +93,11 @@ export default async function NewSessionPage({
     <NewSessionFlow
       userId={user.id}
       sessionName={name || null}
-      sessionMode={sessionMode}
+      sessionMode={templateData?.mode === 'full_day' ? 'full_day' : sessionMode}
       carryForward={carryForward}
       unfinishedHint={unfinishedHint}
+      taskPool={taskPool}
+      templateData={templateData}
     />
   )
 }

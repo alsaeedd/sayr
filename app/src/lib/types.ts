@@ -13,6 +13,9 @@ export interface UserPresets {
   avoidances: string[]
   boundaries: string[]
   buckets?: string[]
+  // Persistent task inbox — tasks the user captures outside a session and
+  // can pull into Musharata when starting one. Not session-scoped.
+  task_pool?: Array<{ text: string; bucket?: string }>
 }
 
 export interface Session {
