@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { redirect } from 'next/navigation'
 import { SessionFlow } from '@/components/SessionFlow'
+import { SessionReview } from '@/components/SessionReview'
 import type { Session } from '@/lib/types'
 
 export default async function SessionPage({ params }: { params: Promise<{ id: string }> }) {
@@ -19,5 +20,12 @@ export default async function SessionPage({ params }: { params: Promise<{ id: st
 
   if (!session) redirect('/dashboard')
 
-  return <SessionFlow session={session as Session} />
+  const s = session as Session
+
+  // Completed sessions get a read-only recap; active ones continue the flow.
+  if (s.status === 'completed') {
+    return <SessionReview session={s} />
+  }
+
+  return <SessionFlow session={s} />
 }

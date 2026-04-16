@@ -102,6 +102,27 @@ export function Muhasaba({
         </motion.div>
       )}
 
+      {/* Per-block breakdown — full-day sessions only */}
+      {muraqaba?.blocks && muraqaba.blocks.length > 0 && (
+        <motion.div variants={fadeUp} className="glass-card p-4 space-y-2">
+          <p className="text-text-muted text-[11px] uppercase tracking-[0.15em]">Per block</p>
+          {muraqaba.blocks.map((b, i) => (
+            <motion.div
+              key={i}
+              className="flex justify-between items-center text-xs"
+              initial={{ opacity: 0, x: -8 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: 0.3 + i * 0.06 }}
+            >
+              <span className="text-text-secondary">{b.label}</span>
+              <span className="text-text-muted tabular-nums">
+                {b.duration_minutes}m · {b.drift_count} {b.drift_count === 1 ? 'drift' : 'drifts'}
+              </span>
+            </motion.div>
+          ))}
+        </motion.div>
+      )}
+
       {/* Animated task checklist */}
       {tasks.length > 0 && (
         <motion.div variants={fadeUp} className="space-y-3">

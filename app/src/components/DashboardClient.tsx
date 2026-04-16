@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { Plus, LogOut, Clock, CheckCircle2, Trash2, X, SlidersHorizontal, Sun, Timer } from 'lucide-react'
+import { Plus, LogOut, Clock, CheckCircle2, Trash2, X, SlidersHorizontal, Sun, Timer, Flame, TrendingUp } from 'lucide-react'
 import { LoadingScreen } from '@/components/LoadingScreen'
 import type { Session } from '@/lib/types'
 
@@ -144,6 +144,39 @@ export function DashboardClient({
   const completedSessions = sessions.filter(s => s.status === 'completed')
   const totalCompleted = completedSessions.length
 
+  // ── Derived stats (computed inline during render, not in effects) ──
+  // Streak: consecutive calendar days going backwards from today with ≥1 session.
+  const streak = useMemo(() => {
+    if (!completedSessions.length) return 0
+    const day = new Date()
+    day.setHours(0, 0, 0, 0)
+    let count = 0
+    while (true) {
+      const dayStart = day.getTime()
+      const dayEnd = dayStart + 86400000
+      const has = completedSessions.some(s => {
+        const t = new Date(s.completed_at!).getTime()
+        return t >= dayStart && t < dayEnd
+      })
+      if (!has) break
+      count++
+      day.setDate(day.getDate() - 1)
+    }
+    return count
+  }, [completedSessions])
+
+  // This-week rollup: sessions in last 7 days.
+  const weekStats = useMemo(() => {
+    const cutoff = Date.now() - 7 * 86400000
+    const recent = completedSessions.filter(s => new Date(s.completed_at!).getTime() > cutoff)
+    const totalMin = recent.reduce((sum, s) => sum + (s.session_duration_minutes || 0), 0)
+    const totalDrifts = recent.reduce((sum, s) => {
+      const m = s.muraqaba as Record<string, unknown> | null
+      return sum + (typeof m?.drift_count === 'number' ? m.drift_count : 0)
+    }, 0)
+    return { count: recent.length, minutes: totalMin, drifts: totalDrifts }
+  }, [completedSessions])
+
   return (
     <main className="flex-1 flex flex-col min-h-screen">
       {/* Header */}
@@ -204,14 +237,33 @@ export function DashboardClient({
             </div>
 
             {totalCompleted > 0 && (
-              <motion.p
-                className="text-text-muted text-sm tracking-wide"
+              <motion.div
+                className="flex items-center justify-center gap-6 text-sm"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 transition={{ delay: 0.6 }}
               >
-                {totalCompleted} {totalCompleted === 1 ? 'session' : 'sessions'} walked
-              </motion.p>
+                {streak > 0 && (
+                  <div className="flex items-center gap-1.5 text-gold">
+                    <Flame size={14} />
+                    <span className="font-medium tabular-nums">{streak}</span>
+                    <span className="text-text-muted text-xs">day streak</span>
+                  </div>
+                )}
+                {weekStats.count > 0 && (
+                  <div className="flex items-center gap-1.5 text-text-secondary">
+                    <TrendingUp size={14} className="text-emerald-light" />
+                    <span className="tabular-nums">{weekStats.count}</span>
+                    <span className="text-text-muted text-xs">this week</span>
+                  </div>
+                )}
+                {weekStats.minutes > 0 && (
+                  <div className="flex items-center gap-1.5 text-text-muted">
+                    <Clock size={13} />
+                    <span className="tabular-nums text-xs">{weekStats.minutes}m</span>
+                  </div>
+                )}
+              </motion.div>
             )}
 
             {/* New session — name input or button */}
@@ -385,7 +437,7 @@ export function DashboardClient({
                 {completedSessions.slice(0, 5).map((session, idx) => (
                   <motion.div
                     key={session.id}
-                    className="glass-card p-5 flex items-center justify-between group relative"
+                    className="glass-card p-5 flex items-center justify-between group relative cursor-pointer"
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, x: -20, height: 0 }}
@@ -395,6 +447,9 @@ export function DashboardClient({
                       damping: 22,
                       delay: idx * 0.06,
                     }}
+                    onClick={() => { setNavigating(true); router.push(`/session/${session.id}`) }}
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.99 }}
                   >
                     <div className="flex items-center gap-3">
                       <motion.div
