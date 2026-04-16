@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, X, RotateCcw, Moon } from 'lucide-react'
+import { Plus, X, RotateCcw, Moon, ArrowRight, Check } from 'lucide-react'
 import { GoldenParticles } from '@/components/GoldenParticles'
 import type { Session } from '@/lib/types'
 
@@ -39,11 +39,23 @@ export function Muataba({
   const [changeForTomorrow, setChangeForTomorrow] = useState('')
   const [gratitude, setGratitude] = useState('')
 
+  // Unfinished tasks the user can pick to carry forward. Seeded from Muhasaba;
+  // stays an empty array if today was a clean sweep.
+  const incompleteTasks = session.muhasaba?.incomplete_tasks ?? []
+  const [carrySelected, setCarrySelected] = useState<boolean[]>(
+    () => incompleteTasks.map(() => false),
+  )
+  const toggleCarrySelected = (i: number) => {
+    setCarrySelected(prev => prev.map((v, idx) => (idx === i ? !v : v)))
+  }
+
   const handleSubmit = () => {
+    const carry = incompleteTasks.filter((_, i) => carrySelected[i])
     onComplete({
       patterns: patterns.filter(p => p.trim()),
       change_for_tomorrow: changeForTomorrow,
       gratitude,
+      carry_tasks: carry.length ? carry : undefined,
     })
   }
 
@@ -195,6 +207,51 @@ export function Muataba({
                   className="input-dark"
                 />
               </motion.div>
+
+              {/* Carry unfinished tasks forward — only appears when Muhasaba
+                  flagged some tasks as incomplete. The selections land in
+                  `carry_tasks` on the muataba payload and are offered as a
+                  suggestion banner in tomorrow's Musharata. */}
+              {incompleteTasks.length > 0 && (
+                <motion.div variants={fadeUp} className="space-y-3">
+                  <div>
+                    <label className="text-text-primary text-sm font-medium">
+                      Carry anything forward?
+                    </label>
+                    <p className="text-text-muted text-xs mt-1">
+                      {incompleteTasks.length} {incompleteTasks.length === 1 ? 'task' : 'tasks'} weren&apos;t
+                      finished today. Tap any to pull into tomorrow&apos;s musharata.
+                    </p>
+                  </div>
+                  <ul className="space-y-1.5">
+                    {incompleteTasks.map((t, i) => {
+                      const selected = carrySelected[i]
+                      return (
+                        <li key={i}>
+                          <button
+                            onClick={() => toggleCarrySelected(i)}
+                            className={`w-full flex items-start gap-2 text-left p-2.5 rounded-lg border transition-all ${
+                              selected
+                                ? 'border-gold/40 bg-gold/[0.06] text-gold'
+                                : 'border-border-subtle text-text-secondary hover:border-border-accent hover:text-text-primary'
+                            }`}
+                          >
+                            <span className="mt-0.5 shrink-0">
+                              {selected ? <Check size={13} /> : <ArrowRight size={13} className="opacity-40" />}
+                            </span>
+                            <span className="flex-1 text-sm">{t.text}</span>
+                            {t.bucket && (
+                              <span className={`text-[10px] uppercase tracking-wider ${selected ? 'text-gold/70' : 'text-text-muted'}`}>
+                                {t.bucket}
+                              </span>
+                            )}
+                          </button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </motion.div>
+              )}
 
               {/* Gratitude */}
               <motion.div variants={fadeUp} className="space-y-3">

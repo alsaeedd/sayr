@@ -78,6 +78,9 @@ export interface MuhasabaData {
   tasks_total: number
   time_drains: string[]
   reflection: string
+  // Tasks explicitly marked incomplete during self-accounting. Used by Muataba
+  // to offer carry-forward, and by the review page for full detail.
+  incomplete_tasks?: Array<{ text: string; bucket?: string }>
 }
 
 export interface MuaqabaData {
@@ -95,6 +98,9 @@ export interface MuatabaData {
   patterns: string[]
   change_for_tomorrow: string
   gratitude: string
+  // Tasks the user explicitly chose to carry forward to tomorrow's Musharata.
+  // Populated at Muataba submission; consumed by the next new-session flow.
+  carry_tasks?: Array<{ text: string; bucket?: string }>
 }
 
 export interface PrayerTimes {

@@ -9,14 +9,30 @@ import { Musharata } from '@/components/steps/Musharata'
 
 const STEP = { ar: 'المشارطة', en: 'Musharata', subtitle: 'Set your conditions' }
 
+type CarryForward = {
+  change_for_tomorrow: string
+  carry_tasks: Array<{ text: string; bucket?: string }>
+  previous_completed_at: string | null
+}
+
+type UnfinishedHint = {
+  previous_tasks: Array<{ text: string; bucket?: string }>
+  completed_count: number
+  total_count: number
+}
+
 export function NewSessionFlow({
   userId,
   sessionName,
   sessionMode,
+  carryForward,
+  unfinishedHint,
 }: {
   userId: string
   sessionName: string | null
   sessionMode: 'time_block' | 'full_day'
+  carryForward?: CarryForward | null
+  unfinishedHint?: UnfinishedHint | null
 }) {
   const router = useRouter()
   const supabase = useMemo(() => createClient(), [])
@@ -143,6 +159,8 @@ export function NewSessionFlow({
               <Musharata
                 session={dummySession}
                 mode={sessionMode}
+                carryForward={carryForward ?? null}
+                unfinishedHint={unfinishedHint ?? null}
                 onComplete={handleMusharataComplete}
               />
             </motion.div>

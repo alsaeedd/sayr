@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, X } from 'lucide-react'
-import type { Session } from '@/lib/types'
+import type { Session, MuhasabaData } from '@/lib/types'
 
 const stagger = {
   hidden: { opacity: 0 },
@@ -21,26 +21,46 @@ const fadeUp = {
 export function Muhasaba({
   session,
   onComplete,
+  initialData,
+  submitLabel = 'Continue to Course Correction',
+  onCancel,
 }: {
   session: Session
   onComplete: (data: Record<string, unknown>) => void
+  initialData?: MuhasabaData | null
+  submitLabel?: string
+  onCancel?: () => void
 }) {
   const musharata = session.musharata
   const muraqaba = session.muraqaba
   const tasks = musharata?.tasks || []
 
-  const [taskCompletion, setTaskCompletion] = useState<boolean[]>(tasks.map(() => false))
-  const [timeDrains, setTimeDrains] = useState<string[]>([''])
-  const [reflection, setReflection] = useState('')
+  // Seed completion from initialData when editing — we stored `incomplete_tasks`
+  // explicitly in handleSubmit, so reverse it to rebuild the boolean array.
+  const seedCompletion = initialData
+    ? tasks.map(t => !(initialData.incomplete_tasks ?? []).some(it => it.text === t.text))
+    : tasks.map(() => false)
+  const [taskCompletion, setTaskCompletion] = useState<boolean[]>(seedCompletion)
+  const [timeDrains, setTimeDrains] = useState<string[]>(
+    initialData?.time_drains?.length ? [...initialData.time_drains, ''] : [''],
+  )
+  const [reflection, setReflection] = useState(initialData?.reflection ?? '')
 
   const completedCount = taskCompletion.filter(Boolean).length
 
   const handleSubmit = () => {
+    // Capture which specific tasks weren't done so Muataba can offer carry-forward.
+    const incompleteTasks = tasks
+      .map((t, i) => ({ task: t, done: taskCompletion[i] }))
+      .filter(x => !x.done)
+      .map(x => ({ text: x.task.text, bucket: x.task.bucket }))
+
     onComplete({
       tasks_completed: completedCount,
       tasks_total: tasks.length,
       time_drains: timeDrains.filter(t => t.trim()),
       reflection,
+      incomplete_tasks: incompleteTasks,
     })
   }
 
@@ -213,15 +233,24 @@ export function Muhasaba({
       </motion.div>
 
       {/* Submit */}
-      <motion.div variants={fadeUp} className="pt-2">
+      <motion.div variants={fadeUp} className="pt-2 space-y-2">
         <motion.button
           onClick={handleSubmit}
           className="btn-gold w-full text-base"
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
         >
-          Continue to Course Correction
+          {submitLabel}
         </motion.button>
+        {onCancel && (
+          <motion.button
+            onClick={onCancel}
+            className="btn-ghost w-full text-sm"
+            whileTap={{ scale: 0.98 }}
+          >
+            Cancel
+          </motion.button>
+        )}
       </motion.div>
     </motion.div>
   )

@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, X } from 'lucide-react'
-import type { Session } from '@/lib/types'
+import type { Session, MuaqabaData } from '@/lib/types'
 
 const stagger = {
   hidden: { opacity: 0 },
@@ -21,13 +21,21 @@ const fadeUp = {
 export function Muaqaba({
   session,
   onComplete,
+  initialData,
+  submitLabel = 'Continue to Mujahada',
+  onCancel,
 }: {
   session: Session
   onComplete: (data: Record<string, unknown>) => void
+  initialData?: MuaqabaData | null
+  submitLabel?: string
+  onCancel?: () => void
 }) {
   const muhasaba = session.muhasaba
-  const [adjustments, setAdjustments] = useState<string[]>([''])
-  const [notes, setNotes] = useState('')
+  const [adjustments, setAdjustments] = useState<string[]>(
+    initialData?.adjustments?.length ? [...initialData.adjustments, ''] : [''],
+  )
+  const [notes, setNotes] = useState(initialData?.notes ?? '')
 
   const handleSubmit = () => {
     onComplete({
@@ -151,15 +159,24 @@ export function Muaqaba({
       </motion.div>
 
       {/* Submit */}
-      <motion.div variants={fadeUp} className="pt-2">
+      <motion.div variants={fadeUp} className="pt-2 space-y-2">
         <motion.button
           onClick={handleSubmit}
           className="btn-gold w-full text-base"
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
         >
-          Continue to Mujahada
+          {submitLabel}
         </motion.button>
+        {onCancel && (
+          <motion.button
+            onClick={onCancel}
+            className="btn-ghost w-full text-sm"
+            whileTap={{ scale: 0.98 }}
+          >
+            Cancel
+          </motion.button>
+        )}
       </motion.div>
     </motion.div>
   )

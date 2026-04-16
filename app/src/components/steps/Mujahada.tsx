@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, X } from 'lucide-react'
-import type { Session } from '@/lib/types'
+import type { Session, MujuhadaData } from '@/lib/types'
 
 const COMMON_LIES = [
   '"Just check it quickly"',
@@ -29,14 +29,26 @@ const fadeUp = {
 export function Mujahada({
   session,
   onComplete,
+  initialData,
+  submitLabel = 'Continue to Final Step',
+  onCancel,
 }: {
   session: Session
   onComplete: (data: Record<string, unknown>) => void
+  initialData?: MujuhadaData | null
+  submitLabel?: string
+  onCancel?: () => void
 }) {
-  const [nafsLies, setNafsLies] = useState<string[]>([''])
-  const [strategies, setStrategies] = useState<string[]>([''])
-  const [reflection, setReflection] = useState('')
-  const [selectedLies, setSelectedLies] = useState<Set<string>>(new Set())
+  const [nafsLies, setNafsLies] = useState<string[]>(
+    initialData?.nafs_lies?.length ? [...initialData.nafs_lies, ''] : [''],
+  )
+  const [strategies, setStrategies] = useState<string[]>(
+    initialData?.strategies?.length ? [...initialData.strategies, ''] : [''],
+  )
+  const [reflection, setReflection] = useState(initialData?.reflection ?? '')
+  const [selectedLies, setSelectedLies] = useState<Set<string>>(
+    () => new Set(initialData?.nafs_lies?.filter(l => COMMON_LIES.includes(l)) ?? []),
+  )
 
   const handleChipClick = (lie: string) => {
     if (selectedLies.has(lie)) return
@@ -213,15 +225,24 @@ export function Mujahada({
       </motion.div>
 
       {/* Submit */}
-      <motion.div variants={fadeUp} className="pt-2">
+      <motion.div variants={fadeUp} className="pt-2 space-y-2">
         <motion.button
           onClick={handleSubmit}
           className="btn-gold w-full text-base"
           whileHover={{ scale: 1.02 }}
           whileTap={{ scale: 0.98 }}
         >
-          Continue to Final Step
+          {submitLabel}
         </motion.button>
+        {onCancel && (
+          <motion.button
+            onClick={onCancel}
+            className="btn-ghost w-full text-sm"
+            whileTap={{ scale: 0.98 }}
+          >
+            Cancel
+          </motion.button>
+        )}
       </motion.div>
     </motion.div>
   )

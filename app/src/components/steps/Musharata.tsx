@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, X, Clock, Layers } from 'lucide-react'
+import { Plus, X, Clock, Layers, Sparkles, ArrowDownCircle } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 import type { Session, PrayerTimes, MusharataData } from '@/lib/types'
 
@@ -53,6 +53,18 @@ type BlockDraft = {
   taskBuckets: string[]
 }
 
+export type MusharataCarryForward = {
+  change_for_tomorrow: string
+  carry_tasks: Array<{ text: string; bucket?: string }>
+  previous_completed_at: string | null
+}
+
+export type MusharataUnfinishedHint = {
+  previous_tasks: Array<{ text: string; bucket?: string }>
+  completed_count: number
+  total_count: number
+}
+
 export function Musharata({
   session,
   mode: modeProp,
@@ -60,6 +72,8 @@ export function Musharata({
   submitLabel = 'Begin Session',
   onComplete,
   onCancel,
+  carryForward,
+  unfinishedHint,
 }: {
   session: Session
   mode?: 'time_block' | 'full_day'
@@ -67,6 +81,8 @@ export function Musharata({
   submitLabel?: string
   onComplete: (data: Record<string, unknown>) => void
   onCancel?: () => void
+  carryForward?: MusharataCarryForward | null
+  unfinishedHint?: MusharataUnfinishedHint | null
 }) {
   // Mode: explicit prop wins, else inferred from initialData, else time_block.
   const mode: 'time_block' | 'full_day' =
@@ -92,6 +108,9 @@ export function Musharata({
   const [boundaries, setBoundaries] = useState<string[]>(seedBoundaries)
   const [buckets, setBuckets] = useState<string[]>([])
   const [useBuckets, setUseBuckets] = useState(seedUseBuckets)
+  // Dismissal flags for the carry-forward / unfinished banners. One-shot per mount.
+  const [carryDismissed, setCarryDismissed] = useState(false)
+  const [unfinishedDismissed, setUnfinishedDismissed] = useState(false)
   const [presetsLoaded, setPresetsLoaded] = useState(false)
   const [timeBlockStart, setTimeBlockStart] = useState(initialData?.time_block_start ?? '')
   const [timeBlockEnd, setTimeBlockEnd] = useState(initialData?.time_block_end ?? '')
@@ -236,6 +255,70 @@ export function Musharata({
   const focusStartTime = useCallback(() => {
     startTimeRef.current?.focus()
   }, [])
+
+  // ──── Carry-forward helpers ───────────────────────────────────────
+  // Append a string to a list of strings, collapsing the stale trailing empty.
+  const appendToStringList = (
+    setter: React.Dispatch<React.SetStateAction<string[]>>,
+    item: string,
+  ) => {
+    setter(prev => {
+      const trimmed = prev.filter(x => x.trim())
+      return [...trimmed, item, '']
+    })
+  }
+
+  const applyChangeToAvoidances = () => {
+    const text = carryForward?.change_for_tomorrow?.trim()
+    if (!text) return
+    appendToStringList(setAvoidances, text)
+    setCarryDismissed(true)
+  }
+  const applyChangeToBoundaries = () => {
+    const text = carryForward?.change_for_tomorrow?.trim()
+    if (!text) return
+    appendToStringList(setBoundaries, text)
+    setCarryDismissed(true)
+  }
+
+  const pullTaskList = (tasksToPull: Array<{ text: string; bucket?: string }>) => {
+    if (!tasksToPull.length) return
+    if (mode === 'time_block') {
+      setTasks(prev => {
+        const trimmed = prev.filter(t => t.trim())
+        return [...trimmed, ...tasksToPull.map(t => t.text), '']
+      })
+      setTaskBuckets(prev => {
+        // Keep buckets aligned index-wise; trim trailing empty parallel slot.
+        const existingFilled = prev.slice(0, prev.length - 1).filter((_, i) => tasks[i]?.trim())
+        return [...existingFilled, ...tasksToPull.map(t => t.bucket || ''), '']
+      })
+    } else {
+      setBlocks(prev => prev.map((b, i) => {
+        if (i !== 0) return b
+        const filledCount = b.tasks.filter(t => t.trim()).length
+        const existingTasks = b.tasks.slice(0, filledCount)
+        const existingBuckets = b.taskBuckets.slice(0, filledCount)
+        return {
+          ...b,
+          tasks: [...existingTasks, ...tasksToPull.map(t => t.text), ''],
+          taskBuckets: [...existingBuckets, ...tasksToPull.map(t => t.bucket || ''), ''],
+        }
+      }))
+    }
+    if (tasksToPull.some(t => t.bucket)) setUseBuckets(true)
+  }
+
+  const pullCarryTasks = () => {
+    if (!carryForward?.carry_tasks?.length) return
+    pullTaskList(carryForward.carry_tasks)
+    setCarryDismissed(true)
+  }
+  const pullUnfinishedTasks = () => {
+    if (!unfinishedHint?.previous_tasks?.length) return
+    pullTaskList(unfinishedHint.previous_tasks)
+    setUnfinishedDismissed(true)
+  }
 
   // Task-specific mutators — keep `taskBuckets` aligned with `tasks` by index.
   const addTaskRow = () => {
@@ -469,6 +552,102 @@ export function Musharata({
       animate="show"
       className="space-y-8 pt-4"
     >
+      {/* Carry-forward banner — surfaces intentions set in yesterday's Muataba.
+          Appears only on new sessions (not on edit), hence the `!initialData` gate. */}
+      {!initialData && carryForward && !carryDismissed && (
+        <motion.div
+          variants={fadeUp}
+          className="glass-card-gold p-4 space-y-3 relative"
+        >
+          <div className="flex items-start gap-3">
+            <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gold/10 flex items-center justify-center">
+              <Sparkles size={14} className="text-gold" />
+            </div>
+            <div className="flex-1 space-y-2 min-w-0">
+              <p className="text-text-muted text-[11px] uppercase tracking-[0.15em]">From yesterday</p>
+              {carryForward.change_for_tomorrow && (
+                <div className="space-y-2">
+                  <p className="text-text-secondary text-sm italic">
+                    &ldquo;{carryForward.change_for_tomorrow}&rdquo;
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <motion.button
+                      onClick={applyChangeToAvoidances}
+                      className="px-3 py-1 rounded-lg text-xs border border-gold/30 bg-gold/[0.06] text-gold hover:bg-gold/[0.1] transition-all"
+                      whileTap={{ scale: 0.95 }}
+                    >
+                      + Add as avoidance
+                    </motion.button>
+                    <motion.button
+                      onClick={applyChangeToBoundaries}
+                      className="px-3 py-1 rounded-lg text-xs border border-emerald-light/30 bg-emerald/[0.04] text-emerald-light hover:bg-emerald/[0.08] transition-all"
+                      whileTap={{ scale: 0.95 }}
+                    >
+                      + Add as boundary
+                    </motion.button>
+                  </div>
+                </div>
+              )}
+              {carryForward.carry_tasks && carryForward.carry_tasks.length > 0 && (
+                <div className="space-y-2 pt-1">
+                  <p className="text-text-secondary text-xs">
+                    {carryForward.carry_tasks.length} {carryForward.carry_tasks.length === 1 ? 'task' : 'tasks'} you said to carry forward
+                  </p>
+                  <motion.button
+                    onClick={pullCarryTasks}
+                    className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs border border-gold/30 bg-gold/[0.06] text-gold hover:bg-gold/[0.1] transition-all"
+                    whileTap={{ scale: 0.95 }}
+                  >
+                    <ArrowDownCircle size={12} />
+                    Pull into tasks
+                  </motion.button>
+                </div>
+              )}
+            </div>
+            <button
+              onClick={() => setCarryDismissed(true)}
+              className="flex-shrink-0 text-text-muted hover:text-text-secondary transition-colors p-1"
+              aria-label="Dismiss"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </motion.div>
+      )}
+
+      {/* Unfinished-tasks hint — shown only when no carryForward banner was shown. */}
+      {!initialData && !carryForward && unfinishedHint && !unfinishedDismissed && (
+        <motion.div variants={fadeUp} className="glass-card p-4 space-y-3 relative">
+          <div className="flex items-start gap-3">
+            <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gold/[0.06] flex items-center justify-center">
+              <ArrowDownCircle size={14} className="text-gold-dim" />
+            </div>
+            <div className="flex-1 space-y-2 min-w-0">
+              <p className="text-text-muted text-[11px] uppercase tracking-[0.15em]">Unfinished yesterday</p>
+              <p className="text-text-secondary text-sm">
+                You completed {unfinishedHint.completed_count} of {unfinishedHint.total_count} tasks.
+                Want to pull the list in and pick up where you left off?
+              </p>
+              <motion.button
+                onClick={pullUnfinishedTasks}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs border border-gold/25 bg-gold/[0.04] text-gold hover:bg-gold/[0.08] transition-all"
+                whileTap={{ scale: 0.95 }}
+              >
+                <ArrowDownCircle size={12} />
+                Pull {unfinishedHint.previous_tasks.length} {unfinishedHint.previous_tasks.length === 1 ? 'task' : 'tasks'}
+              </motion.button>
+            </div>
+            <button
+              onClick={() => setUnfinishedDismissed(true)}
+              className="flex-shrink-0 text-text-muted hover:text-text-secondary transition-colors p-1"
+              aria-label="Dismiss"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        </motion.div>
+      )}
+
       {/* Principle */}
       <motion.div variants={fadeUp} className="glass-card p-5">
         <p className="text-text-secondary text-sm leading-relaxed italic">
