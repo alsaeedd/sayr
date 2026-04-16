@@ -1,7 +1,7 @@
 'use client'
 
 import { motion } from 'framer-motion'
-import { ArrowLeft, Clock, Target, AlertTriangle, Wrench, Swords, Heart } from 'lucide-react'
+import { ArrowLeft, Clock, Target, Wrench, Swords, Heart } from 'lucide-react'
 import type { Session } from '@/lib/types'
 
 const fadeUp = {

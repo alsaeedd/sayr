@@ -77,13 +77,13 @@ export function DashboardClient({
   const greeting = useMemo(() => getGreeting(), [])
 
   const [sessions, setSessions] = useState(initialSessions)
-  const [showNameInput, setShowNameInput] = useState(false)
+  // Derive initial state from URL — avoids setState-in-effect cascade.
+  const [showNameInput, setShowNameInput] = useState(() => searchParams.get('new') === '1')
 
-  // Auto-open name input if redirected with ?new=1
+  // Strip the ?new=1 from the URL once we've consumed it. Side-effect only;
+  // no state sync.
   useEffect(() => {
     if (searchParams.get('new') === '1') {
-      setShowNameInput(true)
-      // Clean the URL
       router.replace('/dashboard', { scroll: false })
     }
   }, [searchParams, router])
@@ -208,9 +208,13 @@ export function DashboardClient({
     return count
   }, [completedSessions])
 
+  // Snapshot "now" once per mount so the useMemo below stays pure across
+  // re-renders. We don't need second-by-second freshness for weekly stats.
+  const [nowMs] = useState(() => Date.now())
+
   // This-week rollup: sessions in last 7 days.
   const weekStats = useMemo(() => {
-    const cutoff = Date.now() - 7 * 86400000
+    const cutoff = nowMs - 7 * 86400000
     const recent = completedSessions.filter(s => new Date(s.completed_at!).getTime() > cutoff)
     const totalMin = recent.reduce((sum, s) => sum + (s.session_duration_minutes || 0), 0)
     const totalDrifts = recent.reduce((sum, s) => {
@@ -218,7 +222,7 @@ export function DashboardClient({
       return sum + (typeof m?.drift_count === 'number' ? m.drift_count : 0)
     }, 0)
     return { count: recent.length, minutes: totalMin, drifts: totalDrifts }
-  }, [completedSessions])
+  }, [completedSessions, nowMs])
 
   return (
     <main className="flex-1 flex flex-col min-h-screen">

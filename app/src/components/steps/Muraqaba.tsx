@@ -394,7 +394,7 @@ export function Muraqaba({
     } else {
       setPhase('complete')
     }
-  }, [blocks, currentBlockIndex, driftCount, remaining, startedWithSeconds])
+  }, [blocks, currentBlockIndex, driftCount, driftNotes, remaining, startedWithSeconds])
 
   const startNextBlock = useCallback(() => {
     setCurrentBlockIndex(i => i + 1)

@@ -1,11 +1,11 @@
 'use client'
 
-import { useRef, useMemo, useEffect } from 'react'
+import { useRef, useEffect } from 'react'
 import { Canvas, useFrame, useThree } from '@react-three/fiber'
 import { Float, Sparkles } from '@react-three/drei'
 import { EffectComposer, Bloom } from '@react-three/postprocessing'
 import {
-  Group, Mesh, PointLight,
+  Group, PointLight,
   CylinderGeometry, MeshStandardMaterial, MeshBasicMaterial,
   Color, FrontSide, AdditiveBlending, DoubleSide,
 } from 'three'
@@ -17,7 +17,6 @@ const WAX_GEO = new CylinderGeometry(0.025, 0.032, 0.35, 8)
 const WAX_RIM_GEO = new CylinderGeometry(0.035, 0.025, 0.015, 8)
 const WICK_GEO = new CylinderGeometry(0.003, 0.003, 0.04, 4)
 const FLAME_OUTER_GEO = new CylinderGeometry(0, 0.022, 0.09, 6)
-const FLAME_INNER_GEO = new CylinderGeometry(0, 0.012, 0.065, 6)
 const FLAME_CORE_GEO = new CylinderGeometry(0, 0.006, 0.04, 4)
 
 const WAX_MAT = new MeshStandardMaterial({
