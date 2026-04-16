@@ -54,15 +54,22 @@ export function SettingsClient({ profile }: { profile: Profile }) {
   const [avoidances, setAvoidances] = useState<string[]>(profile.presets?.avoidances || [])
   const [boundaries, setBoundaries] = useState<string[]>(profile.presets?.boundaries || [])
   const [buckets, setBuckets] = useState<string[]>(profile.presets?.buckets || [])
+  const [nafsLies, setNafsLies] = useState<string[]>(profile.presets?.nafs_lies || [])
   const [customAvoidance, setCustomAvoidance] = useState('')
   const [customBoundary, setCustomBoundary] = useState('')
   const [customBucket, setCustomBucket] = useState('')
+  const [customLie, setCustomLie] = useState('')
   const avoidInputRef = useRef<HTMLInputElement>(null)
   const boundaryInputRef = useRef<HTMLInputElement>(null)
   const bucketInputRef = useRef<HTMLInputElement>(null)
+  const lieInputRef = useRef<HTMLInputElement>(null)
 
   const removeBucket = (item: string) => {
     setBuckets(prev => prev.filter(b => b !== item))
+    markDirty()
+  }
+  const removeLie = (item: string) => {
+    setNafsLies(prev => prev.filter(l => l !== item))
     markDirty()
   }
 
@@ -116,7 +123,7 @@ export function SettingsClient({ profile }: { profile: Profile }) {
     setSaveState('saving')
     await supabase
       .from('profiles')
-      .update({ prayer_method: prayerMethod, presets: { avoidances, boundaries, buckets } })
+      .update({ prayer_method: prayerMethod, presets: { avoidances, boundaries, buckets, nafs_lies: nafsLies } })
       .eq('id', profile.id)
 
     setSaveState('saved')
@@ -437,6 +444,61 @@ export function SettingsClient({ profile }: { profile: Profile }) {
               />
               <motion.button
                 onClick={() => addCustom(customBucket, setCustomBucket, buckets, setBuckets, bucketInputRef)}
+                className="w-10 h-10 flex items-center justify-center rounded-lg border border-border-subtle text-text-muted hover:text-gold hover:border-gold/25 transition-all"
+                whileTap={{ scale: 0.9 }}
+              >
+                <Plus size={16} />
+              </motion.button>
+            </div>
+          </motion.section>
+
+          <div className="h-px bg-border-subtle" />
+
+          {/* ── Nafs Lies Library ── */}
+          <motion.section variants={fadeUp} className="space-y-4">
+            <div>
+              <h2 className="text-base font-medium text-text-primary">Nafs Lies</h2>
+              <p className="text-text-muted text-xs mt-1">
+                Common lies your nafs tells you. Auto-loaded as quick-select chips in Mujahada.
+              </p>
+            </div>
+
+            <AnimatePresence>
+              {nafsLies.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {nafsLies.map(item => (
+                    <motion.span
+                      key={item}
+                      initial={{ opacity: 0, scale: 0.9 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.9 }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm border border-gold/25 bg-gold/[0.05] text-gold"
+                    >
+                      {item}
+                      <button
+                        onClick={() => removeLie(item)}
+                        className="opacity-60 hover:opacity-100 transition-opacity"
+                      >
+                        <X size={12} />
+                      </button>
+                    </motion.span>
+                  ))}
+                </div>
+              )}
+            </AnimatePresence>
+
+            <div className="flex gap-2">
+              <input
+                ref={lieInputRef}
+                type="text"
+                value={customLie}
+                onChange={e => setCustomLie(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && addCustom(customLie, setCustomLie, nafsLies, setNafsLies, lieInputRef)}
+                placeholder={`"Just check it quickly"...`}
+                className="input-dark flex-1"
+              />
+              <motion.button
+                onClick={() => addCustom(customLie, setCustomLie, nafsLies, setNafsLies, lieInputRef)}
                 className="w-10 h-10 flex items-center justify-center rounded-lg border border-border-subtle text-text-muted hover:text-gold hover:border-gold/25 transition-all"
                 whileTap={{ scale: 0.9 }}
               >

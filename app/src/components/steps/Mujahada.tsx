@@ -1,11 +1,12 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, X } from 'lucide-react'
+import { createClient } from '@/lib/supabase/client'
 import type { Session, MujuhadaData } from '@/lib/types'
 
-const COMMON_LIES = [
+const DEFAULT_LIES = [
   '"Just check it quickly"',
   '"You deserve a break" (after 15 min)',
   '"This other thing is more urgent"',
@@ -39,6 +40,22 @@ export function Mujahada({
   submitLabel?: string
   onCancel?: () => void
 }) {
+  const supabase = useMemo(() => createClient(), [])
+  const [commonLies, setCommonLies] = useState(DEFAULT_LIES)
+
+  // Load user's custom nafs-lies library from presets.
+  useEffect(() => {
+    supabase
+      .from('profiles')
+      .select('presets')
+      .eq('id', session.user_id)
+      .single()
+      .then(({ data }) => {
+        const custom = (data?.presets as Record<string, unknown> | null)?.nafs_lies as string[] | undefined
+        if (custom?.length) setCommonLies(custom)
+      })
+  }, [supabase, session.user_id])
+
   const [nafsLies, setNafsLies] = useState<string[]>(
     initialData?.nafs_lies?.length ? [...initialData.nafs_lies, ''] : [''],
   )
@@ -47,7 +64,7 @@ export function Mujahada({
   )
   const [reflection, setReflection] = useState(initialData?.reflection ?? '')
   const [selectedLies, setSelectedLies] = useState<Set<string>>(
-    () => new Set(initialData?.nafs_lies?.filter(l => COMMON_LIES.includes(l)) ?? []),
+    () => new Set(initialData?.nafs_lies?.filter(l => commonLies.includes(l)) ?? []),
   )
 
   const handleChipClick = (lie: string) => {
@@ -92,7 +109,7 @@ export function Mujahada({
           animate="show"
           variants={{ hidden: {}, show: { transition: { staggerChildren: 0.04, delayChildren: 0.2 } } }}
         >
-          {COMMON_LIES.map((lie, i) => (
+          {commonLies.map((lie, i) => (
             <motion.button
               key={i}
               variants={{
@@ -139,7 +156,7 @@ export function Mujahada({
                   onClick={() => {
                     setNafsLies(prev => prev.filter((_, idx) => idx !== i))
                     // Deselect chip if it was a common lie
-                    if (COMMON_LIES.includes(lie)) {
+                    if (commonLies.includes(lie)) {
                       setSelectedLies(prev => {
                         const next = new Set(prev)
                         next.delete(lie)

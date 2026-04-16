@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Play, Pause, Pencil, ArrowRight, Check } from 'lucide-react'
 import { GoldenParticles } from '@/components/GoldenParticles'
 import { createClient } from '@/lib/supabase/client'
-import type { Session, MuraqabaBlockResult } from '@/lib/types'
+import type { Session, MuraqabaBlockResult, PrayerTimes } from '@/lib/types'
 
 type Phase = 'briefing' | 'active' | 'between' | 'complete'
 
@@ -45,6 +45,11 @@ export function Muraqaba({
   const [driftCount, setDriftCount] = useState(0) // drifts in current block (or overall for time_block)
   const [driftKey, setDriftKey] = useState(0) // for ripple re-trigger
   const [blockResults, setBlockResults] = useState<MuraqabaBlockResult[]>([])
+  // Drift notes — short annotations added after each drift tap.
+  const [driftNotes, setDriftNotes] = useState<string[]>([])
+  const [showDriftInput, setShowDriftInput] = useState(false)
+  const driftInputRef = useRef<HTMLInputElement>(null)
+
   // Tasks the user opted to carry forward. Keyed by TARGET block index.
   // Each entry is a list of tasks copied from a past block into that future one.
   const [carriedTasks, setCarriedTasks] = useState<Record<number, Array<{ text: string; bucket?: string }>>>({})
@@ -85,6 +90,36 @@ export function Muraqaba({
   // Wall-clock target: absolute ms timestamp the timer should end at.
   // Source of truth — survives background-tab throttling of setInterval.
   const endTimeRef = useRef<number | null>(null)
+
+  // Prayer times — for the "next prayer" indicator in active view.
+  const [prayerTimes, setPrayerTimes] = useState<PrayerTimes | null>(null)
+  useEffect(() => {
+    fetch('/api/prayer-times')
+      .then(r => r.json())
+      .then(d => setPrayerTimes(d.timings))
+      .catch(() => { /* non-critical */ })
+  }, [])
+
+  // Compute next upcoming prayer relative to now. Recalculated whenever
+  // remaining changes (every tick), but it's just string comparisons — cheap.
+  const nextPrayer = useMemo(() => {
+    if (!prayerTimes) return null
+    const now = new Date()
+    const nowMin = now.getHours() * 60 + now.getMinutes()
+    const entries = Object.entries(prayerTimes) as [string, string][]
+    for (const [name, time] of entries) {
+      const [h, m] = time.split(':').map(Number)
+      const tMin = h * 60 + m
+      if (tMin > nowMin) {
+        const diff = tMin - nowMin
+        const hrs = Math.floor(diff / 60)
+        const mins = diff % 60
+        return { name, time, label: hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m` }
+      }
+    }
+    return null
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prayerTimes, remaining])
 
   // Keep `remaining` in sync with `totalSeconds` whenever the current block changes
   // (and on initial mount). Skip the first run after a restore so the
@@ -133,6 +168,7 @@ export function Muraqaba({
     setDriftCount(s.driftCount ?? 0)
     setBlockResults(s.blockResults ?? [])
     setCarriedTasks(s.carriedTasks ?? {})
+    setDriftNotes((s as Record<string, unknown>).driftNotes as string[] ?? [])
     blockStartRef.current = s.blockStart ?? ''
     sessionStartRef.current = s.sessionStart ?? ''
     if (s.startedWithSeconds != null) setStartedWithSeconds(s.startedWithSeconds)
@@ -182,6 +218,7 @@ export function Muraqaba({
       phase,
       currentBlockIndex,
       driftCount,
+      driftNotes,
       blockResults,
       carriedTasks,
       blockStart: blockStartRef.current,
@@ -209,7 +246,7 @@ export function Muraqaba({
     // Intentionally omit `remaining` from deps — we only snapshot it when
     // isRunning flips (pause). Polling ticks would thrash localStorage.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, currentBlockIndex, driftCount, blockResults, carriedTasks, isRunning, startedWithSeconds, storageKey, supabase, session.id])
+  }, [phase, currentBlockIndex, driftCount, driftNotes, blockResults, carriedTasks, isRunning, startedWithSeconds, storageKey, supabase, session.id])
 
   // Flush any pending DB write on unmount so short-lived states don't get lost.
   useEffect(() => {
@@ -318,6 +355,15 @@ export function Muraqaba({
   const handleDrift = () => {
     setDriftCount(prev => prev + 1)
     setDriftKey(prev => prev + 1)
+    setShowDriftInput(true)
+    setTimeout(() => driftInputRef.current?.focus(), 100)
+  }
+
+  const submitDriftNote = (note: string) => {
+    if (note.trim()) {
+      setDriftNotes(prev => [...prev, note.trim()])
+    }
+    setShowDriftInput(false)
   }
 
   // Record the just-finished block and move to 'between' (or 'complete' if last).
@@ -330,12 +376,14 @@ export function Muraqaba({
       const result: MuraqabaBlockResult = {
         label: block.label,
         drift_count: driftCount,
+        drift_notes: driftNotes.length > 0 ? driftNotes : undefined,
         session_start: blockStartRef.current,
         session_end: end,
         duration_minutes: Math.round((startedWithSeconds - remaining) / 60),
       }
       setBlockResults(prev => [...prev, result])
       setDriftCount(0)
+      setDriftNotes([])
 
       const isLast = currentBlockIndex >= blocks.length - 1
       if (isLast) {
@@ -378,6 +426,7 @@ export function Muraqaba({
       onComplete({
         mode: 'time_block',
         drift_count: driftCount,
+        drift_notes: driftNotes.length > 0 ? driftNotes : undefined,
         session_start: sessionStartRef.current,
         session_end: sessionEnd,
         duration_minutes: Math.round((startedWithSeconds - remaining) / 60),
@@ -622,6 +671,9 @@ export function Muraqaba({
                   animate={{ opacity: isRunning ? 0.6 : 1 }}
                 >
                   {isRunning ? 'in focus' : 'paused'}
+                  {nextPrayer && isRunning && (
+                    <span className="text-gold/50 ml-2">· {nextPrayer.name} in {nextPrayer.label}</span>
+                  )}
                 </motion.p>
               </div>
             </div>
@@ -677,6 +729,32 @@ export function Muraqaba({
                 )}
               </AnimatePresence>
             </motion.button>
+
+            {/* Drift note input — slides in after each drift tap */}
+            <AnimatePresence>
+              {showDriftInput && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ type: 'spring', stiffness: 300, damping: 28 }}
+                  className="w-full max-w-sm"
+                >
+                  <input
+                    ref={driftInputRef}
+                    type="text"
+                    placeholder="What pulled you? (optional, Enter to skip)"
+                    className="input-dark w-full text-sm"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        submitDriftNote((e.target as HTMLInputElement).value)
+                      }
+                    }}
+                    onBlur={(e) => submitDriftNote(e.target.value)}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             <motion.p
               className="arabic text-gold/30 text-sm text-center"

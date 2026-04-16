@@ -658,7 +658,23 @@ export function DashboardClient({
               onClick={(e) => e.stopPropagation()}
             >
               <p className="text-text-primary text-sm font-medium">Delete this session?</p>
-              <p className="text-text-muted text-xs">This cannot be undone.</p>
+              {(() => {
+                const s = sessions.find(x => x.id === deletingId)
+                if (!s) return <p className="text-text-muted text-xs">This cannot be undone.</p>
+                const taskCount = s.musharata?.tasks?.length ?? 0
+                const driftCount = (s.muraqaba as Record<string, unknown> | null)?.drift_count as number | undefined
+                const parts = [
+                  taskCount > 0 ? `${taskCount} tasks` : '',
+                  typeof driftCount === 'number' ? `${driftCount} drifts` : '',
+                  s.session_duration_minutes ? `${s.session_duration_minutes}m` : '',
+                ].filter(Boolean)
+                return (
+                  <p className="text-text-muted text-xs">
+                    {parts.length > 0 ? `${parts.join(' · ')} — ` : ''}
+                    This cannot be undone.
+                  </p>
+                )
+              })()}
               <div className="flex gap-2 justify-center">
                 <button
                   onClick={() => handleDelete(deletingId)}

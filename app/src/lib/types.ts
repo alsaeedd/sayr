@@ -13,6 +13,7 @@ export interface UserPresets {
   avoidances: string[]
   boundaries: string[]
   buckets?: string[]
+  nafs_lies?: string[]
   // Persistent task inbox — tasks the user captures outside a session and
   // can pull into Musharata when starting one. Not session-scoped.
   task_pool?: Array<{ text: string; bucket?: string }>
@@ -61,6 +62,7 @@ export interface MusharataData {
 export interface MuraqabaBlockResult {
   label: string
   drift_count: number
+  drift_notes?: string[]
   session_start: string
   session_end: string
   duration_minutes: number

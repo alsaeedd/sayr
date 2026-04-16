@@ -3,7 +3,7 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { useRouter } from 'next/navigation'
-import { Pencil } from 'lucide-react'
+import { Pencil, LogOut } from 'lucide-react'
 import { createClient } from '@/lib/supabase/client'
 
 import type { Session } from '@/lib/types'
@@ -193,11 +193,21 @@ export function SessionFlow({ session: initialSession }: { session: Session }) {
         className="px-8 py-5 border-b border-border-subtle relative z-10"
       >
         <div className="max-w-2xl mx-auto flex items-center justify-between">
-          <a href="/dashboard" className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
-            <span className="arabic text-gold text-sm leading-none">سَيْر</span>
-            <span className="text-text-muted text-[11px]">/</span>
-            <span className="text-text-secondary text-xs tracking-wide">{session.name || 'Work Session'}</span>
-          </a>
+          <div className="flex items-center gap-3">
+            <a href="/dashboard" className="flex items-center gap-2.5 hover:opacity-80 transition-opacity">
+              <span className="arabic text-gold text-sm leading-none">سَيْر</span>
+              <span className="text-text-muted text-[11px]">/</span>
+              <span className="text-text-secondary text-xs tracking-wide">{session.name || 'Work Session'}</span>
+            </a>
+            <motion.a
+              href="/dashboard"
+              className="w-7 h-7 flex items-center justify-center rounded-lg text-text-muted hover:text-text-secondary hover:bg-bg-elevated/50 transition-all"
+              whileTap={{ scale: 0.9 }}
+              title="Save & exit to dashboard"
+            >
+              <LogOut size={13} />
+            </motion.a>
+          </div>
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
               {STEPS.map((step, i) => (
