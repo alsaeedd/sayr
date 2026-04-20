@@ -128,6 +128,34 @@ export function DashboardClient({
     poolInputRef.current?.focus()
   }
   const removePoolTask = (i: number) => savePool(taskPool.filter((_, idx) => idx !== i))
+  const updatePoolTask = (i: number, patch: Partial<PoolTask>) =>
+    savePool(taskPool.map((t, idx) => (idx === i ? { ...t, ...patch } : t)))
+
+  // Inline-edit state: which row is being edited, and the in-flight draft.
+  const [editingPoolIdx, setEditingPoolIdx] = useState<number | null>(null)
+  const [editPoolText, setEditPoolText] = useState('')
+  const [editPoolBucket, setEditPoolBucket] = useState('')
+
+  const startEditPoolTask = (i: number) => {
+    setEditingPoolIdx(i)
+    setEditPoolText(taskPool[i].text)
+    setEditPoolBucket(taskPool[i].bucket ?? '')
+  }
+  const commitEditPoolTask = () => {
+    if (editingPoolIdx == null) return
+    const text = editPoolText.trim()
+    if (!text) {
+      // Empty text removes the task — feels natural.
+      removePoolTask(editingPoolIdx)
+    } else {
+      updatePoolTask(editingPoolIdx, {
+        text,
+        bucket: editPoolBucket || undefined,
+      })
+    }
+    setEditingPoolIdx(null)
+  }
+  const cancelEditPoolTask = () => setEditingPoolIdx(null)
 
   const startNewSession = async () => {
     // Only auto-complete sessions that have actually finished mu'ataba (have the data)
@@ -410,30 +438,81 @@ export function DashboardClient({
             </h3>
             <div className="glass-card p-4 space-y-3">
               <AnimatePresence mode="popLayout">
-                {taskPool.map((task, i) => (
-                  <motion.div
-                    key={`pool-${task.text}-${i}`}
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0, marginBottom: 0 }}
-                    transition={{ type: 'spring', stiffness: 300, damping: 28 }}
-                    className="flex items-start gap-2"
-                  >
-                    <span className="text-gold mt-1 text-xs">·</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-text-secondary text-sm">{task.text}</p>
-                      {task.bucket && (
-                        <p className="text-gold/60 text-[10px] uppercase tracking-wider">{task.bucket}</p>
-                      )}
-                    </div>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); removePoolTask(i) }}
-                      className="text-text-muted hover:text-text-secondary p-1 shrink-0 opacity-0 group-hover:opacity-100 hover:!opacity-100 transition-opacity"
+                {taskPool.map((task, i) => {
+                  const isEditing = editingPoolIdx === i
+                  return (
+                    <motion.div
+                      key={`pool-${i}`}
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0, marginBottom: 0 }}
+                      transition={{ type: 'spring', stiffness: 300, damping: 28 }}
+                      className="flex items-start gap-2 group"
                     >
-                      <X size={13} />
-                    </button>
-                  </motion.div>
-                ))}
+                      <span className="text-gold mt-2 text-xs shrink-0">·</span>
+                      {isEditing ? (
+                        <div className="flex-1 flex gap-2 min-w-0">
+                          <input
+                            type="text"
+                            autoFocus
+                            value={editPoolText}
+                            onChange={(e) => setEditPoolText(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') commitEditPoolTask()
+                              if (e.key === 'Escape') cancelEditPoolTask()
+                            }}
+                            onBlur={commitEditPoolTask}
+                            className="input-dark flex-1 py-1.5"
+                          />
+                          {buckets.length > 0 && (
+                            <select
+                              value={editPoolBucket}
+                              // Commit on bucket change rather than waiting for blur,
+                              // since mousedown on a <select> blurs the input and
+                              // would otherwise trigger a double-save race.
+                              onChange={(e) => {
+                                setEditPoolBucket(e.target.value)
+                                if (editingPoolIdx != null) {
+                                  updatePoolTask(editingPoolIdx, {
+                                    text: editPoolText.trim() || taskPool[editingPoolIdx].text,
+                                    bucket: e.target.value || undefined,
+                                  })
+                                }
+                              }}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              className={`input-dark px-2 text-xs max-w-[7rem] cursor-pointer py-1.5 ${
+                                editPoolBucket ? 'text-gold' : 'text-text-muted'
+                              }`}
+                            >
+                              <option value="">Bucket</option>
+                              {buckets.map(b => (
+                                <option key={b} value={b}>{b}</option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => startEditPoolTask(i)}
+                          className="flex-1 min-w-0 text-left hover:text-text-primary transition-colors -mt-0.5"
+                        >
+                          <p className="text-text-secondary text-sm">{task.text}</p>
+                          {task.bucket && (
+                            <p className="text-gold/60 text-[10px] uppercase tracking-wider">{task.bucket}</p>
+                          )}
+                        </button>
+                      )}
+                      {!isEditing && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); removePoolTask(i) }}
+                          className="text-text-muted hover:text-text-secondary p-1 shrink-0 opacity-0 group-hover:opacity-100 hover:!opacity-100 transition-opacity"
+                        >
+                          <X size={13} />
+                        </button>
+                      )}
+                    </motion.div>
+                  )
+                })}
               </AnimatePresence>
               {taskPool.length === 0 && (
                 <p className="text-text-muted text-xs text-center py-2">
