@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -98,25 +98,63 @@ export function DashboardClient({
   const [poolBucket, setPoolBucket] = useState('')
   const poolInputRef = useRef<HTMLInputElement>(null)
 
-  // Debounced write — saves pool to profiles.presets.task_pool after changes
-  // settle. Fire-and-forget; localStorage isn't needed since presets persist.
+  // Debounced DB write with proper error handling + flush on unmount and on
+  // beforeunload so rapid refreshes after an edit don't lose data.
   const poolTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pendingPoolRef = useRef<PoolTask[] | null>(null)
+
+  const flushPoolWrite = useCallback(async () => {
+    const pending = pendingPoolRef.current
+    if (!pending) return
+    pendingPoolRef.current = null
+    const { data: profile, error: fetchErr } = await supabase
+      .from('profiles')
+      .select('presets')
+      .eq('id', userId)
+      .single()
+    if (fetchErr) {
+      console.error('[task-pool] fetch presets failed:', fetchErr)
+      return
+    }
+    const presets = (profile?.presets ?? {}) as Record<string, unknown>
+    const { error: updateErr } = await supabase
+      .from('profiles')
+      .update({ presets: { ...presets, task_pool: pending } })
+      .eq('id', userId)
+    if (updateErr) {
+      console.error('[task-pool] update failed:', updateErr)
+    }
+  }, [supabase, userId])
+
   const savePool = (nextPool: PoolTask[]) => {
     setTaskPool(nextPool)
+    pendingPoolRef.current = nextPool
     if (poolTimerRef.current) clearTimeout(poolTimerRef.current)
-    poolTimerRef.current = setTimeout(async () => {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('presets')
-        .eq('id', userId)
-        .single()
-      const presets = (profile?.presets ?? {}) as Record<string, unknown>
-      void supabase
-        .from('profiles')
-        .update({ presets: { ...presets, task_pool: nextPool } })
-        .eq('id', userId)
+    poolTimerRef.current = setTimeout(() => {
+      void flushPoolWrite()
     }, 400)
   }
+
+  // Flush on unmount and on page unload. Covers refresh-within-400ms and
+  // navigation-away-before-commit. Using keepalive-compatible approach via
+  // a synchronous flush trigger (the await still races against unload, but
+  // Supabase's fetch uses keepalive internally for PATCH requests).
+  useEffect(() => {
+    const onBeforeUnload = () => {
+      if (poolTimerRef.current) {
+        clearTimeout(poolTimerRef.current)
+        void flushPoolWrite()
+      }
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      if (poolTimerRef.current) {
+        clearTimeout(poolTimerRef.current)
+        void flushPoolWrite()
+      }
+    }
+  }, [flushPoolWrite])
 
   const addPoolTask = () => {
     const text = poolInput.trim()
@@ -451,7 +489,17 @@ export function DashboardClient({
                     >
                       <span className="text-gold mt-2 text-xs shrink-0">·</span>
                       {isEditing ? (
-                        <div className="flex-1 flex gap-2 min-w-0">
+                        // Wrap editor in a focus-containment div. onBlur
+                        // fires only when focus leaves the ENTIRE row
+                        // (not when clicking inside to the bucket select).
+                        <div
+                          className="flex-1 flex gap-2 min-w-0"
+                          onBlur={(e) => {
+                            const next = e.relatedTarget as Node | null
+                            if (next && e.currentTarget.contains(next)) return
+                            commitEditPoolTask()
+                          }}
+                        >
                           <input
                             type="text"
                             autoFocus
@@ -461,25 +509,12 @@ export function DashboardClient({
                               if (e.key === 'Enter') commitEditPoolTask()
                               if (e.key === 'Escape') cancelEditPoolTask()
                             }}
-                            onBlur={commitEditPoolTask}
                             className="input-dark flex-1 py-1.5"
                           />
                           {buckets.length > 0 && (
                             <select
                               value={editPoolBucket}
-                              // Commit on bucket change rather than waiting for blur,
-                              // since mousedown on a <select> blurs the input and
-                              // would otherwise trigger a double-save race.
-                              onChange={(e) => {
-                                setEditPoolBucket(e.target.value)
-                                if (editingPoolIdx != null) {
-                                  updatePoolTask(editingPoolIdx, {
-                                    text: editPoolText.trim() || taskPool[editingPoolIdx].text,
-                                    bucket: e.target.value || undefined,
-                                  })
-                                }
-                              }}
-                              onMouseDown={(e) => e.stopPropagation()}
+                              onChange={(e) => setEditPoolBucket(e.target.value)}
                               className={`input-dark px-2 text-xs max-w-[7rem] cursor-pointer py-1.5 ${
                                 editPoolBucket ? 'text-gold' : 'text-text-muted'
                               }`}
