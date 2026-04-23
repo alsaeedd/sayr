@@ -95,6 +95,7 @@ export function Musharata({
   // Seed state from initialData when editing; empty defaults when creating.
   const seedTaskList = initialData?.tasks.map(t => t.text) ?? ['']
   const seedTaskBuckets = initialData?.tasks.map(t => t.bucket || '') ?? ['']
+  const seedTaskFromPool = initialData?.tasks.map(t => t.from_pool || '') ?? ['']
   const seedAvoidances = initialData?.avoidances.length
     ? [...initialData.avoidances, '']
     : ['']
@@ -106,6 +107,9 @@ export function Musharata({
   const [tasks, setTasks] = useState<string[]>(seedTaskList)
   // Parallel to `tasks`: the bucket assigned to each task (empty string = none).
   const [taskBuckets, setTaskBuckets] = useState<string[]>(seedTaskBuckets)
+  // Parallel: origin pool text ('' = not from pool). Used to purge pool entries
+  // when the task is marked done in Muhasaba. Preserves origin across text edits.
+  const [taskFromPool, setTaskFromPool] = useState<string[]>(seedTaskFromPool)
   const [avoidances, setAvoidances] = useState<string[]>(seedAvoidances)
   const [boundaries, setBoundaries] = useState<string[]>(seedBoundaries)
   const [buckets, setBuckets] = useState<string[]>([])
@@ -283,17 +287,30 @@ export function Musharata({
     setCarryDismissed(true)
   }
 
-  const pullTaskList = (tasksToPull: Array<{ text: string; bucket?: string }>) => {
+  // `markAsFromPool`: when pulling from the task pool we stamp each added task
+  // with its original pool text so Muhasaba can purge completed pool entries.
+  const pullTaskList = (
+    tasksToPull: Array<{ text: string; bucket?: string }>,
+    markAsFromPool = false,
+  ) => {
     if (!tasksToPull.length) return
+    const originFor = (t: { text: string }) => (markAsFromPool ? t.text : '')
+
     if (mode === 'time_block') {
+      // Capture the currently-filled indices so we trim the stale trailing
+      // empty slot before appending.
+      const filledIndices = tasks.map((t, i) => (t.trim() ? i : -1)).filter(i => i >= 0)
       setTasks(prev => {
-        const trimmed = prev.filter(t => t.trim())
+        const trimmed = filledIndices.map(i => prev[i])
         return [...trimmed, ...tasksToPull.map(t => t.text), '']
       })
       setTaskBuckets(prev => {
-        // Keep buckets aligned index-wise; trim trailing empty parallel slot.
-        const existingFilled = prev.slice(0, prev.length - 1).filter((_, i) => tasks[i]?.trim())
-        return [...existingFilled, ...tasksToPull.map(t => t.bucket || ''), '']
+        const existing = filledIndices.map(i => prev[i] ?? '')
+        return [...existing, ...tasksToPull.map(t => t.bucket || ''), '']
+      })
+      setTaskFromPool(prev => {
+        const existing = filledIndices.map(i => prev[i] ?? '')
+        return [...existing, ...tasksToPull.map(originFor), '']
       })
     } else {
       setBlocks(prev => prev.map((b, i) => {
@@ -311,6 +328,49 @@ export function Musharata({
     if (tasksToPull.some(t => t.bucket)) setUseBuckets(true)
   }
 
+  // Toggle a single pool task in/out of the active task list. Used by the chip
+  // picker so users add exactly what they want.
+  const togglePoolTask = (poolTask: { text: string; bucket?: string }) => {
+    if (mode !== 'time_block') {
+      // In full_day mode, pool chips target the first block's task list.
+      setBlocks(prev => prev.map((b, i) => {
+        if (i !== 0) return b
+        const has = b.tasks.some(t => t === poolTask.text)
+        if (has) {
+          const idxs = b.tasks.map((t, j) => (t === poolTask.text ? j : -1)).filter(j => j >= 0)
+          const keepIdxs = new Set(b.tasks.map((_, j) => j).filter(j => !idxs.includes(j)))
+          return {
+            ...b,
+            tasks: b.tasks.filter((_, j) => keepIdxs.has(j)),
+            taskBuckets: b.taskBuckets.filter((_, j) => keepIdxs.has(j)),
+          }
+        }
+        const filledCount = b.tasks.filter(t => t.trim()).length
+        const existingTasks = b.tasks.slice(0, filledCount)
+        const existingBuckets = b.taskBuckets.slice(0, filledCount)
+        return {
+          ...b,
+          tasks: [...existingTasks, poolTask.text, ''],
+          taskBuckets: [...existingBuckets, poolTask.bucket || '', ''],
+        }
+      }))
+      if (poolTask.bucket) setUseBuckets(true)
+      return
+    }
+
+    // time_block mode. Match on from_pool (origin), not visible text — so
+    // renaming a pulled task doesn't orphan the pool linkage on subsequent
+    // toggles.
+    const existingIdx = taskFromPool.findIndex(origin => origin === poolTask.text)
+    if (existingIdx >= 0) {
+      setTasks(prev => prev.filter((_, i) => i !== existingIdx))
+      setTaskBuckets(prev => prev.filter((_, i) => i !== existingIdx))
+      setTaskFromPool(prev => prev.filter((_, i) => i !== existingIdx))
+    } else {
+      pullTaskList([poolTask], true)
+    }
+  }
+
   const pullCarryTasks = () => {
     if (!carryForward?.carry_tasks?.length) return
     pullTaskList(carryForward.carry_tasks)
@@ -322,14 +382,16 @@ export function Musharata({
     setUnfinishedDismissed(true)
   }
 
-  // Task-specific mutators — keep `taskBuckets` aligned with `tasks` by index.
+  // Task-specific mutators — keep `taskBuckets` and `taskFromPool` aligned.
   const addTaskRow = () => {
     setTasks(prev => [...prev, ''])
     setTaskBuckets(prev => [...prev, ''])
+    setTaskFromPool(prev => [...prev, ''])
   }
   const removeTaskRow = (index: number) => {
     setTasks(prev => prev.filter((_, i) => i !== index))
     setTaskBuckets(prev => prev.filter((_, i) => i !== index))
+    setTaskFromPool(prev => prev.filter((_, i) => i !== index))
   }
   const handleTaskKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, index: number) => {
     if (e.key !== 'Enter') return
@@ -469,13 +531,17 @@ export function Musharata({
     }
 
     const finalTasks = tasks
-      .map((text, i) => ({ text, bucket: taskBuckets[i] }))
+      .map((text, i) => ({ text, bucket: taskBuckets[i], fromPool: taskFromPool[i] }))
       .filter(t => t.text.trim())
       .map(t => {
         const bucket = useBuckets && t.bucket && buckets.includes(t.bucket) ? t.bucket : undefined
-        return bucket
-          ? { text: t.text, completed: false, bucket }
-          : { text: t.text, completed: false }
+        const base: { text: string; completed: boolean; bucket?: string; from_pool?: string } = {
+          text: t.text,
+          completed: false,
+        }
+        if (bucket) base.bucket = bucket
+        if (t.fromPool) base.from_pool = t.fromPool
+        return base
       })
 
     onComplete({
@@ -738,17 +804,41 @@ export function Musharata({
         >
           <Plus size={14} /> Add task
         </motion.button>
-        {taskPool && taskPool.length > 0 && (
-          <motion.button
-            onClick={() => {
-              pullTaskList(taskPool)
-            }}
-            className="text-gold-dim hover:text-gold text-sm flex items-center gap-1"
-            whileHover={{ x: 4 }}
-            transition={{ type: 'spring', stiffness: 400, damping: 25 }}
-          >
-            <ArrowDownCircle size={14} /> Pull {taskPool.length} from pool
-          </motion.button>
+        {!initialData && taskPool && taskPool.length > 0 && (
+          <div className="pt-2 space-y-2">
+            <div className="flex items-center gap-2">
+              <ArrowDownCircle size={12} className="text-gold-dim" />
+              <span className="text-text-muted text-[11px] uppercase tracking-[0.15em]">
+                From your pool
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {taskPool.map((pt, i) => {
+                const selected = mode === 'time_block'
+                  ? taskFromPool.some(origin => origin === pt.text)
+                  : blocks[0]?.tasks.some(t => t === pt.text) ?? false
+                return (
+                  <motion.button
+                    key={`pool-chip-${i}`}
+                    onClick={() => togglePoolTask(pt)}
+                    className={`px-2.5 py-1 rounded-lg text-xs border transition-all text-left ${
+                      selected
+                        ? 'border-gold/40 bg-gold/[0.08] text-gold'
+                        : 'border-border-subtle text-text-muted hover:text-text-secondary hover:border-border-accent'
+                    }`}
+                    whileTap={{ scale: 0.95 }}
+                  >
+                    {selected ? '✓ ' : '+ '}{pt.text}
+                    {pt.bucket && (
+                      <span className={`ml-1.5 text-[10px] ${selected ? 'text-gold/60' : 'text-text-muted/70'}`}>
+                        · {pt.bucket}
+                      </span>
+                    )}
+                  </motion.button>
+                )
+              })}
+            </div>
+          </div>
         )}
       </motion.div>
 

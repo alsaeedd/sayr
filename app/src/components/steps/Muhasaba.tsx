@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, X } from 'lucide-react'
-import type { Session, MuhasabaData } from '@/lib/types'
+import { createClient } from '@/lib/supabase/client'
+import type { Session, MuhasabaData, UserPresets } from '@/lib/types'
 
 const stagger = {
   hidden: { opacity: 0 },
@@ -48,12 +49,47 @@ export function Muhasaba({
 
   const completedCount = taskCompletion.filter(Boolean).length
 
+  const supabase = useMemo(() => createClient(), [])
+
+  // Remove pool entries for tasks the user finished AND that originated from
+  // the dashboard task pool. Uses the `from_pool` origin so renames in Musharata
+  // don't break the linkage.
+  const purgeCompletedPoolTasks = async () => {
+    const completedPoolOrigins = tasks
+      .map((t, i) => ({ t, done: taskCompletion[i] }))
+      .filter(x => x.done && x.t.from_pool)
+      .map(x => x.t.from_pool!)
+    if (!completedPoolOrigins.length) return
+    const { data: profile, error: fetchErr } = await supabase
+      .from('profiles')
+      .select('presets')
+      .eq('id', session.user_id)
+      .single()
+    if (fetchErr) {
+      console.error('[pool-purge] fetch presets failed:', fetchErr)
+      return
+    }
+    const presets = (profile?.presets ?? {}) as UserPresets
+    const pool = presets.task_pool ?? []
+    const toRemove = new Set(completedPoolOrigins)
+    const next = pool.filter(p => !toRemove.has(p.text))
+    if (next.length === pool.length) return // nothing to do
+    const { error: updateErr } = await supabase
+      .from('profiles')
+      .update({ presets: { ...presets, task_pool: next } })
+      .eq('id', session.user_id)
+    if (updateErr) console.error('[pool-purge] update failed:', updateErr)
+  }
+
   const handleSubmit = () => {
     // Capture which specific tasks weren't done so Muataba can offer carry-forward.
     const incompleteTasks = tasks
       .map((t, i) => ({ task: t, done: taskCompletion[i] }))
       .filter(x => !x.done)
       .map(x => ({ text: x.task.text, bucket: x.task.bucket }))
+
+    // Fire-and-forget — a pool purge failure shouldn't block Muhasaba advancing.
+    void purgeCompletedPoolTasks()
 
     onComplete({
       tasks_completed: completedCount,

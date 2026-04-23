@@ -40,13 +40,15 @@ export interface MusharataBlock {
   label: string
   start: string
   end: string
-  tasks: { text: string; completed: boolean; bucket?: string }[]
+  tasks: { text: string; completed: boolean; bucket?: string; from_pool?: string }[]
 }
 
 export interface MusharataData {
   // Absent on legacy sessions — treat undefined as 'time_block'.
   mode?: 'time_block' | 'full_day'
-  tasks: { text: string; completed: boolean; bucket?: string }[]
+  // `from_pool` holds the original pool text when this task was pulled from
+  // the dashboard task pool. Used by Muhasaba to purge completed pool items.
+  tasks: { text: string; completed: boolean; bucket?: string; from_pool?: string }[]
   // Only populated in full_day mode. Top-level `tasks` is also populated
   // (flattened from blocks, with bucket = block.label) so downstream
   // steps (Muraqaba timer, Muhasaba checklist) keep working unchanged.
