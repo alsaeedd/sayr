@@ -186,15 +186,16 @@ export function Musharata({
     }
   }, [])
 
-  // Time validation
+  // Time validation. Allows blocks that cross midnight (end < start treated as
+  // next day, e.g. 23:00 → 00:30). Only disallowed: end == start (zero-length).
   useEffect(() => {
     if (timeBlockStart && timeBlockEnd) {
       const [sh, sm] = timeBlockStart.split(':').map(Number)
       const [eh, em] = timeBlockEnd.split(':').map(Number)
       const startMin = sh * 60 + sm
       const endMin = eh * 60 + em
-      if (endMin <= startMin) {
-        setTimeError('End time must be after start time')
+      if (endMin === startMin) {
+        setTimeError('Start and end times can\u2019t be identical')
       } else {
         setTimeError('')
       }
@@ -471,12 +472,13 @@ export function Musharata({
     }))
   }
 
-  // Validation — full-day blocks must each have a start, end, label, and end > start.
+  // Validation — each block needs label/start/end and a non-zero duration.
+  // end < start is allowed (block crosses midnight); only end == start is invalid.
   const blocksValid = blocks.length > 0 && blocks.every(b => {
     if (!b.label.trim() || !b.start || !b.end) return false
     const [sh, sm] = b.start.split(':').map(Number)
     const [eh, em] = b.end.split(':').map(Number)
-    return eh * 60 + em > sh * 60 + sm
+    return (eh * 60 + em) !== (sh * 60 + sm)
   }) && blocks.some(b => b.tasks.some(t => t.trim()))
 
   const canProceed = mode === 'full_day'

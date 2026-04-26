@@ -9,18 +9,27 @@ import type { Session, MuraqabaBlockResult, PrayerTimes } from '@/lib/types'
 
 type Phase = 'briefing' | 'active' | 'between' | 'complete'
 
+// Duration of a block in seconds. When end <= start, the block crosses
+// midnight (e.g. 23:00 → 00:30 = 90 min); add 24h to end.
 function durationSecs(start: string, end: string): number {
   const [sh, sm] = start.split(':').map(Number)
   const [eh, em] = end.split(':').map(Number)
-  return Math.max((eh * 60 + em) - (sh * 60 + sm), 1) * 60
+  let diff = (eh * 60 + em) - (sh * 60 + sm)
+  if (diff <= 0) diff += 24 * 60
+  return Math.max(diff, 1) * 60
 }
 
-// Absolute ms of today-at-HH:MM. Used to pin the timer to a wall-clock
-// target (e.g., Maghrib at 18:00) rather than a fixed duration-from-now.
-function endOfBlockTodayMs(endHHMM: string): number {
-  const [h, m] = endHHMM.split(':').map(Number)
+// Absolute ms of the next wall-clock instant matching `endHHMM`, given the
+// block's `startHHMM`. If the block crosses midnight (end <= start), end is
+// tomorrow's clock — never today's. Otherwise end is today's clock (which may
+// already be in the past if the user is starting late).
+function endOfBlockClockMs(startHHMM: string, endHHMM: string): number {
+  const [sh, sm] = startHHMM.split(':').map(Number)
+  const [eh, em] = endHHMM.split(':').map(Number)
   const d = new Date()
-  d.setHours(h, m, 0, 0)
+  d.setHours(eh, em, 0, 0)
+  const crossesMidnight = (eh * 60 + em) <= (sh * 60 + sm)
+  if (crossesMidnight) d.setDate(d.getDate() + 1)
   return d.getTime()
 }
 
@@ -325,9 +334,13 @@ export function Muraqaba({
     // Clock-based target: the block's end time today (or, in time_block mode,
     // the session's chosen end time). Starting early gives a longer window,
     // starting late gives a shorter one — the anchor is the wall-clock target
-    // (e.g., Maghrib), not a fixed duration from now.
+    // (e.g., Maghrib), not a fixed duration from now. When end <= start the
+    // block crosses midnight, so the target rolls to tomorrow.
     const endHHMM = blocks?.[currentBlockIndex]?.end ?? musharata?.time_block_end
-    const target = endHHMM ? endOfBlockTodayMs(endHHMM) : Date.now() + totalSeconds * 1000
+    const startHHMM = blocks?.[currentBlockIndex]?.start ?? musharata?.time_block_start
+    const target = endHHMM && startHHMM
+      ? endOfBlockClockMs(startHHMM, endHHMM)
+      : Date.now() + totalSeconds * 1000
     const actualRemaining = Math.max(1, Math.ceil((target - Date.now()) / 1000))
 
     endTimeRef.current = target
